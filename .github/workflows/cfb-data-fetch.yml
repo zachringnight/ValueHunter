@@ -22,7 +22,7 @@ jobs:
   fetch:
     runs-on: ubuntu-latest
     env:
-      CFBD_API_KEY: ${{ secrets.CFBD_API_KEY }}
+      CFBD_API_KEY: ${{ OvDDxP6B6eSjqOGQYXQ5H6iQ57tzKnYhGgoKmOwuV/fwlIpSp9ssZtHH4OJK7b09}}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
