@@ -151,6 +151,50 @@ assembled.  Feel free to write your own analysis scripts to backtest and
 calibrate the model over 2021–2024.  Because the code uses a single week of
 data at a time, you can iterate quickly.
 
+## College Football data via cfbfastR
+
+This repo includes a simple, secure pipeline to fetch College Football data using the R package [cfbfastR](https://cfbfastR.sportsdataverse.org/), which wraps the [CollegeFootballData API](https://collegefootballdata.com/).
+
+**Important: Never commit API keys.**
+
+### 1. Add your API key as a GitHub repository secret
+
+- Go to: Settings → Secrets and variables → Actions → New repository secret
+- Name: `CFBD_API_KEY`
+- Value: your key from https://collegefootballdata.com/key
+
+### 2. Run the data fetch workflow
+
+- Navigate to the Actions tab → "Fetch CFB data (cfbfastR)"
+- Click "Run workflow"
+- Provide a `season` (e.g., 2024) and optionally set `season_type` (regular or postseason)
+- The job will produce an artifact named like `cfb-data-<season>-<season_type>` containing Parquet and CSV files under `data/cfbd`.
+
+### 3. Run locally (optional)
+
+- Install R (https://cloud.r-project.org) and optionally RStudio
+- Install packages in an R console:
+  ```r
+  install.packages(c("arrow"), repos = "https://cloud.r-project.org")
+  if (!requireNamespace("remotes", quietly = TRUE)) install.packages("remotes")
+  remotes::install_github("sportsdataverse/cfbfastR")
+  ```
+- Provide your API key in your environment. In R, you can do this temporarily for a session:
+  ```r
+  Sys.setenv(CFBD_API_KEY = "YOUR-KEY-HERE")
+  ```
+  Or add `CFBD_API_KEY=YOUR-KEY-HERE` to your `~/.Renviron` and restart R.
+- Run the script:
+  ```bash
+  Rscript scripts/fetch_cfb_data.R --season 2024 --season_type regular
+  ```
+- Outputs are written to `data/cfbd` as Parquet and CSV.
+
+### Notes
+
+- Data files are git-ignored to keep the repository small. Download them from the Actions run artifacts or manage them locally.
+- If you hit API rate limits, try a smaller query or wait a bit and re-run.
+
 ## License
 
 This project is released under the MIT License.  See the `LICENSE` file for

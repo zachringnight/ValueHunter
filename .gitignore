@@ -43,3 +43,12 @@ Thumbs.db
 # Output files
 data/out/*
 !data/out/.gitkeep
+
+# R and local environment
+.Rhistory
+.RData
+.Rproj.user/
+.Renviron
+
+# CFB data outputs (fetched via cfbfastR)
+data/cfbd/
