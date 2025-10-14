@@ -51,6 +51,8 @@ rush, passing game versus coverage, and an overall “tilt” score.
    If a file is missing or disabled in `configs/settings.yaml`, the package
    gracefully falls back to the base metrics only.
 
+> **💡 New to the integration?** Check out the [FAQ](FAQ.md) for common questions about integrating your stats files with CFBD API data.
+
 ### Installation
 
 Clone this repository and install it in editable mode:
@@ -213,6 +215,13 @@ This repo includes a simple, secure pipeline to fetch College Football data usin
 
 - Data files are git-ignored to keep the repository small. Download them from the Actions run artifacts or manage them locally.
 - If you hit API rate limits, try a smaller query or wait a bit and re-run.
+
+## Additional Documentation
+
+- **[FAQ](FAQ.md)** - Common questions about integrating your files with CFBD API
+- **[Data Integration Guide](DATA_INTEGRATION.md)** - Architecture and data flow details
+- **[Integration Examples](INTEGRATION_EXAMPLES.md)** - Detailed usage examples and Python API
+- **[Usage Guide](USAGE.md)** - Command-line reference
 
 ## License
 
