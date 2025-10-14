@@ -221,7 +221,7 @@ def fetch_cfbd_games_from_api(
         DataFrame with game data, or None if fetch fails
     """
     if not CFBD_AVAILABLE:
-        print("⚠ cfbd package not available. Install with: pip install cfbd")
+        print("⚠ cfbd package not available. Install with: pip install 'cfbd>=5.0.0'")
         return None
     
     # Get API key
