@@ -86,12 +86,93 @@ Combining both sources lets you:
 - **CFBD data only**: Run the R script to fetch data (no Python analysis needed)
 - **Both integrated**: Run `cfb-mismatch analyze --season 2024`
 
-## Q: How do I get a CFBD API key?
+## Q: How do I get and set up a CFBD API key?
 
-1. Go to https://collegefootballdata.com/key
-2. Sign up for a free account
-3. Generate an API key
-4. Set it in your environment: `export CFBD_API_KEY="your-key"`
+### Getting Your API Key
+
+1. Visit https://collegefootballdata.com/key
+2. Sign up for a free account (if you don't have one)
+3. Generate your API key
+4. Copy the key for use in the next step
+
+### Setting Up the API Key
+
+The API key must be set as an environment variable named `CFBD_API_KEY`. Choose the method appropriate for your use case:
+
+#### Quick Setup (Current Terminal Session Only)
+
+**Linux/Mac:**
+```bash
+export CFBD_API_KEY="your-api-key-here"
+```
+
+**Windows Command Prompt:**
+```cmd
+set CFBD_API_KEY=your-api-key-here
+```
+
+**Windows PowerShell:**
+```powershell
+$env:CFBD_API_KEY="your-api-key-here"
+```
+
+#### Permanent Setup (Recommended)
+
+**Linux/Mac - Add to Shell Configuration:**
+```bash
+# For bash users
+echo 'export CFBD_API_KEY="your-api-key-here"' >> ~/.bashrc
+source ~/.bashrc
+
+# For zsh users
+echo 'export CFBD_API_KEY="your-api-key-here"' >> ~/.zshrc
+source ~/.zshrc
+```
+
+**Windows - System Environment Variables:**
+1. Search for "Environment Variables" in Windows settings
+2. Click "Edit the system environment variables"
+3. Click "Environment Variables" button
+4. Under "User variables", click "New"
+5. Set Variable name: `CFBD_API_KEY`
+6. Set Variable value: your API key
+7. Click OK and restart your terminal
+
+**R Users - Add to .Renviron:**
+```bash
+echo 'CFBD_API_KEY=your-api-key-here' >> ~/.Renviron
+```
+Then restart R.
+
+#### For GitHub Actions
+
+1. Go to: Settings → Secrets and variables → Actions → New repository secret
+2. Name: `CFBD_API_KEY`
+3. Value: your API key
+4. Click "Add secret"
+
+### Verify Your Setup
+
+**Linux/Mac:**
+```bash
+echo $CFBD_API_KEY
+```
+
+**Windows Command Prompt:**
+```cmd
+echo %CFBD_API_KEY%
+```
+
+**Windows PowerShell:**
+```powershell
+echo $env:CFBD_API_KEY
+```
+
+Your API key should be displayed. If it's empty, the environment variable isn't set correctly.
+
+### Security
+
+⚠️ **Important:** Never commit your API key to version control! Always use environment variables or repository secrets.
 
 ## Q: What if team names don't match between datasets?
 
