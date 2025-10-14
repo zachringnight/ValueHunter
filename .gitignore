@@ -40,6 +40,16 @@ Thumbs.db
 # Data files (keep structure but ignore large data)
 *.numbers
 
+# R and local environment
+.Rhistory
+.RData
+.Rproj.user/
+.Renviron
+
 # Output files
 data/out/*
 !data/out/.gitkeep
+
+# CFB data outputs (downloaded via workflow artifacts)
+/data/cfbd/
+*.parquet
