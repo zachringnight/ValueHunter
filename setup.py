@@ -27,7 +27,7 @@ setup(
     install_requires=[
         "pandas>=1.5.0",
         "pyyaml>=6.0",
-        "cfbd>=5.0.0",
+        "requests>=2.28.0",
     ],
     entry_points={
         "console_scripts": [

@@ -2,20 +2,14 @@
 Adapter for loading and fetching CFBD (College Football Data) API data.
 
 This module provides functions to:
-1. Fetch game data and team information directly from the CFBD API using the cfbd Python package
+1. Fetch game data and team information directly from the CFBD API using HTTP requests
 2. Load game data and team information from CSV/Parquet files (for cached/pre-fetched data)
 """
 
 import os
 import pandas as pd
+import requests
 from typing import Optional, Tuple
-
-try:
-    import cfbd
-    from cfbd.rest import ApiException
-    CFBD_AVAILABLE = True
-except ImportError:
-    CFBD_AVAILABLE = False
 
 
 def load_cfbd_games(
@@ -210,7 +204,7 @@ def fetch_cfbd_games_from_api(
     api_key: Optional[str] = None
 ) -> Optional[pd.DataFrame]:
     """
-    Fetch game data directly from CFBD API using the cfbd Python package.
+    Fetch game data directly from CFBD API using HTTP requests.
     
     Args:
         season: Year of the season (e.g., 2024)
@@ -220,10 +214,6 @@ def fetch_cfbd_games_from_api(
     Returns:
         DataFrame with game data, or None if fetch fails
     """
-    if not CFBD_AVAILABLE:
-        print("⚠ cfbd package not available. Install with: pip install 'cfbd>=5.0.0'")
-        return None
-    
     # Get API key
     if api_key is None:
         api_key = os.getenv("CFBD_API_KEY")
@@ -232,25 +222,27 @@ def fetch_cfbd_games_from_api(
         print("⚠ CFBD_API_KEY not found in environment")
         return None
     
-    # Configure API client
-    configuration = cfbd.Configuration()
-    configuration.api_key['Authorization'] = api_key
-    configuration.api_key_prefix['Authorization'] = 'Bearer'
-    
-    # Create API instance
-    api_instance = cfbd.GamesApi(cfbd.ApiClient(configuration))
+    # API endpoint
+    url = "https://api.collegefootballdata.com/games"
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Accept": "application/json"
+    }
+    params = {
+        "year": season,
+        "seasonType": season_type
+    }
     
     try:
         # Fetch games
-        games = api_instance.get_games(year=season, season_type=season_type)
-        
-        # Convert to list of dictionaries
-        games_data = [game.to_dict() for game in games]
+        response = requests.get(url, headers=headers, params=params)
+        response.raise_for_status()
         
         # Convert to DataFrame
+        games_data = response.json()
         return pd.DataFrame(games_data)
         
-    except ApiException as e:
+    except requests.exceptions.RequestException as e:
         print(f"✗ Error fetching games from CFBD API: {e}")
         return None
     except Exception as e:
@@ -260,7 +252,7 @@ def fetch_cfbd_games_from_api(
 
 def fetch_cfbd_team_info_from_api(api_key: Optional[str] = None) -> Optional[pd.DataFrame]:
     """
-    Fetch team information directly from CFBD API using the cfbd Python package.
+    Fetch team information directly from CFBD API using HTTP requests.
     
     Args:
         api_key: CFBD API key. If None, will try to get from CFBD_API_KEY environment variable
@@ -268,10 +260,6 @@ def fetch_cfbd_team_info_from_api(api_key: Optional[str] = None) -> Optional[pd.
     Returns:
         DataFrame with team info, or None if fetch fails
     """
-    if not CFBD_AVAILABLE:
-        print("⚠ cfbd package not available. Install with: pip install cfbd")
-        return None
-    
     # Get API key
     if api_key is None:
         api_key = os.getenv("CFBD_API_KEY")
@@ -280,25 +268,23 @@ def fetch_cfbd_team_info_from_api(api_key: Optional[str] = None) -> Optional[pd.
         print("⚠ CFBD_API_KEY not found in environment")
         return None
     
-    # Configure API client
-    configuration = cfbd.Configuration()
-    configuration.api_key['Authorization'] = api_key
-    configuration.api_key_prefix['Authorization'] = 'Bearer'
-    
-    # Create API instance
-    api_instance = cfbd.TeamsApi(cfbd.ApiClient(configuration))
+    # API endpoint
+    url = "https://api.collegefootballdata.com/teams"
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Accept": "application/json"
+    }
     
     try:
         # Fetch teams
-        teams = api_instance.get_teams()
-        
-        # Convert to list of dictionaries
-        teams_data = [team.to_dict() for team in teams]
+        response = requests.get(url, headers=headers)
+        response.raise_for_status()
         
         # Convert to DataFrame
+        teams_data = response.json()
         return pd.DataFrame(teams_data)
         
-    except ApiException as e:
+    except requests.exceptions.RequestException as e:
         print(f"⚠ Warning: could not fetch team info from CFBD API: {e}")
         return None
     except Exception as e:

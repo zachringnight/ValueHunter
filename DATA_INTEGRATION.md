@@ -36,7 +36,7 @@ This aggregates player-level data to team-level metrics and generates comparison
 
 **Location**: `data/cfbd/` (created by Python script)
 
-**Source**: CollegeFootballData API via cfbd Python package
+**Source**: CollegeFootballData API via direct HTTP requests
 
 **Files Generated**:
 - `{season}_{type}_games.csv` - Game results and scores
@@ -121,7 +121,7 @@ The two data sources are **complementary**:
    ┌──────────────────────┐    ┌─────────────────────┐
    │  Python Adapters     │    │  Python Script      │
    │  (cfb_mismatch/      │    │  (fetch_cfb_data.py)│
-   │   adapters/)         │    │  + cfbd package     │
+   │   adapters/)         │    │  + requests         │
    └──────────┬───────────┘    └─────────┬───────────┘
               │                           │
               │                           │
@@ -194,7 +194,7 @@ cfbd_paths:
 
 3. **CFBD Data Adapter**
    - ✅ Python adapter to load CFBD CSV/Parquet files
-   - ✅ Direct API fetching using cfbd Python package
+   - ✅ Direct API fetching using HTTP requests to api.collegefootballdata.com
    - ✅ Merge with user stats by team name
    - ✅ Expose via Python API and CLI commands
 

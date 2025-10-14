@@ -280,9 +280,9 @@ assembled.  Feel free to write your own analysis scripts to backtest and
 calibrate the model over 2021–2024.  Because the code uses a single week of
 data at a time, you can iterate quickly.
 
-## College Football data via cfbd Python package
+## College Football data via Direct API Calls
 
-This repo includes a simple, secure pipeline to fetch College Football data using the [cfbd Python package](https://github.com/CFBD/cfbd-python), which wraps the [CollegeFootballData API](https://collegefootballdata.com/).
+This repo includes a simple, secure pipeline to fetch College Football data using direct HTTP requests to the [CollegeFootballData API](https://collegefootballdata.com/) at https://api.collegefootballdata.com/
 
 **Important: Never commit API keys.** See the [Setting Up Your API Key](#setting-up-your-api-key) section for proper setup instructions.
 
@@ -312,7 +312,7 @@ This will fetch game data and team information and save them to `data/cfbd/` dir
 
 Once your API key is set up as a repository secret:
 
-- Navigate to the Actions tab → "Fetch CFB data (Python cfbd package)"
+- Navigate to the Actions tab → "Fetch CFB data (Direct API)"
 - Click "Run workflow"
 - Provide a `season` (e.g., 2024) and optionally set `season_type` (regular or postseason)
 - The job will produce an artifact named like `cfb-data-<season>-<season_type>` containing Parquet and CSV files under `data/cfbd`.
@@ -321,7 +321,7 @@ Once your API key is set up as a repository secret:
 
 - Data files are git-ignored to keep the repository small. Download them from the Actions run artifacts or manage them locally.
 - If you hit API rate limits, try a smaller query or wait a bit and re-run.
-- The Python cfbd package is now the primary method for fetching data (replacing the previous R-based approach)
+- The implementation uses direct HTTP requests to https://api.collegefootballdata.com/
 
 ## Additional Documentation
 

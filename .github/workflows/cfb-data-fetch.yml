@@ -1,4 +1,4 @@
-name: Fetch CFB data (Python cfbd package)
+name: Fetch CFB data (Direct API)
 
 on:
   workflow_dispatch:
@@ -35,7 +35,7 @@ jobs:
       - name: Install Python dependencies
         shell: bash
         run: |
-          pip install pandas pyarrow pyyaml cfbd
+          pip install pandas pyarrow pyyaml requests
 
       - name: Run data fetcher
         shell: bash
