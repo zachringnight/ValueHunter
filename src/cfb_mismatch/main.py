@@ -79,7 +79,7 @@ def fetch_team_stats(year: int, week: Optional[int] = None) -> pd.DataFrame:
     for stat in team_stats:
         stats_data.append({
             "team": stat.team,
-            "games": stat.offense.plays if stat.offense else 0,
+            "games": getattr(stat, "games", 0),
         })
     
     return pd.DataFrame(stats_data)
