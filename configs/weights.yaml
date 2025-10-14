@@ -1,0 +1,59 @@
+# CFB Mismatch Model - Feature Weights
+# ======================================
+# Adjust these weights to tune the relative importance of each feature
+# in computing mismatch scores.
+
+# Base CFBD metrics weights
+base_weights:
+  # Run game metrics
+  run_epa: 0.30
+  run_success_rate: 0.25
+  run_explosiveness: 0.20
+  
+  # Pass game metrics
+  pass_epa: 0.30
+  pass_success_rate: 0.25
+  pass_explosiveness: 0.20
+  
+  # Pass protection metrics
+  sack_rate: 0.35
+  pressure_rate: 0.30
+  
+  # Defensive metrics
+  def_havoc_rate: 0.25
+  def_stuff_rate: 0.20
+  
+  # Pace and efficiency
+  pace: 0.15
+  
+# Extended PFF feature weights (when use_pff: true)
+pff_weights:
+  # Offensive line vs defensive line
+  ol_pass_block_wr: 0.40
+  dl_pass_rush_wr: 0.40
+  ol_run_block_wr: 0.35
+  dl_run_stop_wr: 0.35
+  
+  # Front and coverage
+  def_front_heavy_pct: 0.25
+  def_cover_man_pct: 0.30
+  
+  # Run concepts
+  run_concept_inside_zone_rate: 0.20
+  run_concept_outside_zone_rate: 0.20
+  run_concept_gap_rate: 0.20
+  run_concept_power_rate: 0.15
+
+# Extended FantasyPoints feature weights (when use_fantasypoints: true)
+fp_weights:
+  # Receiver metrics
+  receiver_yprr_vs_man: 0.35
+  receiver_yprr_vs_zone: 0.35
+  receiver_target_share: 0.20
+  receiver_slot_rate: 0.15
+
+# Composite score weights (how to combine different mismatch types)
+composite_weights:
+  run_mismatch: 0.35
+  pass_mismatch: 0.35
+  passpro_mismatch: 0.30

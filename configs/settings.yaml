@@ -1,0 +1,34 @@
+# CFB Mismatch Model - Global Settings
+# =====================================
+
+# Feature toggles
+use_pff: false
+use_fantasypoints: false
+
+# CFBD API configuration
+cfbd:
+  # API key should be set via CFBD_API_KEY environment variable
+  api_base_url: "https://api.collegefootballdata.com"
+  timeout: 30
+
+# PFF data file paths
+pff_paths:
+  ol_dl: "data/external/pff_ol_dl.csv"
+  def_front_cov: "data/external/pff_def_front_cov.csv"
+  run_concepts: "data/external/pff_run_concepts.csv"
+
+# FantasyPoints data file paths
+fp_paths:
+  receiver_splits: "data/external/fp_receiver_splits.csv"
+
+# Output configuration
+output:
+  default_dir: "data/out"
+  file_prefix: "cfb_unit_mismatches"
+  top_n_mismatches: 20
+
+# Data processing
+processing:
+  min_games: 3  # Minimum games played for team to be included
+  normalize_scores: true
+  score_scale: 100  # Scale normalized scores to 0-100
