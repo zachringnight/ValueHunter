@@ -1,0 +1,26 @@
+# Global configuration for CFB Mismatch Model
+
+# API settings
+cfbd_api_key: ${CFBD_API_KEY}  # Set via environment variable
+
+# Feature toggles
+use_pff: false  # Set to true when PFF data is available
+use_fantasypoints: false  # Set to true when FantasyPoints data is available
+use_stats_files: true  # Use the uploaded stats files
+
+# Data paths
+stats_paths:
+  defense_coverage_scheme: "data/external/defense_coverage_scheme 2.csv"
+  receiving_concept: "data/external/receiving_concept 2.csv"
+  receiving_scheme: "data/external/receiving_scheme 2.csv"
+
+pff_paths:
+  ol_dl: "data/external/pff_ol_dl.csv"
+  def_front_cov: "data/external/pff_def_front_cov.csv"
+  run_concepts: "data/external/pff_run_concepts.csv"
+
+fp_paths:
+  receiver_splits: "data/external/fp_receiver_splits.csv"
+
+# Output settings
+output_dir: "data/out"
