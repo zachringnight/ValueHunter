@@ -93,7 +93,9 @@ def load_all_stats(config: Dict) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFra
 def load_cfbd_data(
     season: Optional[int] = None,
     season_type: str = "regular",
-    data_dir: Optional[str] = None
+    data_dir: Optional[str] = None,
+    fetch_from_api: bool = False,
+    api_key: Optional[str] = None
 ) -> Tuple[Optional[pd.DataFrame], Optional[pd.DataFrame], Optional[pd.DataFrame]]:
     """
     Load CFBD API data (games, team info, aggregated stats).
@@ -102,6 +104,8 @@ def load_cfbd_data(
         season: Year of season to load (required)
         season_type: 'regular' or 'postseason'
         data_dir: Directory containing CFBD data files
+        fetch_from_api: If True, fetch data from API instead of loading from files
+        api_key: CFBD API key (only used if fetch_from_api=True)
         
     Returns:
         Tuple of (games_df, team_info_df, team_stats_df)
@@ -115,7 +119,7 @@ def load_cfbd_data(
     
     try:
         games_df, team_info_df, team_stats_df = load_and_aggregate_cfbd_data(
-            season, season_type, data_dir
+            season, season_type, data_dir, fetch_from_api, api_key
         )
         
         if games_df is not None:

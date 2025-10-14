@@ -1,4 +1,4 @@
-name: Fetch CFB data (cfbfastR)
+name: Fetch CFB data (Python cfbd package)
 
 on:
   workflow_dispatch:
@@ -27,16 +27,15 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up R
-        uses: r-lib/actions/setup-r@v2
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
-          r-version: 'latest'
+          python-version: '3.11'
 
-      - name: Install R package dependencies
+      - name: Install Python dependencies
         shell: bash
         run: |
-          Rscript -e "install.packages(c('remotes','arrow'), repos='https://cloud.r-project.org')"
-          Rscript -e "remotes::install_github('sportsdataverse/cfbfastR')"
+          pip install pandas pyarrow pyyaml cfbd
 
       - name: Run data fetcher
         shell: bash
@@ -44,7 +43,7 @@ jobs:
           SEASON: ${{ inputs.season }}
           SEASON_TYPE: ${{ inputs.season_type }}
         run: |
-          Rscript scripts/fetch_cfb_data.R --season "${SEASON}" --season_type "${SEASON_TYPE}"
+          python scripts/fetch_cfb_data.py --season "${SEASON}" --season_type "${SEASON_TYPE}"
 
       - name: Upload artifact (data/cfbd)
         uses: actions/upload-artifact@v4

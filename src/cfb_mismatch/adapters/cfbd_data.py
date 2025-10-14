@@ -1,13 +1,21 @@
 """
-Adapter for loading CFBD (College Football Data) API data fetched by the R script.
+Adapter for loading and fetching CFBD (College Football Data) API data.
 
-This module provides functions to load game data and team information
-that was fetched from the CollegeFootballData API using cfbfastR.
+This module provides functions to:
+1. Fetch game data and team information directly from the CFBD API using the cfbd Python package
+2. Load game data and team information from CSV/Parquet files (for cached/pre-fetched data)
 """
 
 import os
 import pandas as pd
 from typing import Optional, Tuple
+
+try:
+    import cfbd
+    from cfbd.rest import ApiException
+    CFBD_AVAILABLE = True
+except ImportError:
+    CFBD_AVAILABLE = False
 
 
 def load_cfbd_games(
@@ -123,7 +131,9 @@ def aggregate_team_games(games_df: pd.DataFrame) -> pd.DataFrame:
 def load_and_aggregate_cfbd_data(
     season: int,
     season_type: str = "regular",
-    data_dir: str = "data/cfbd"
+    data_dir: str = "data/cfbd",
+    fetch_from_api: bool = False,
+    api_key: Optional[str] = None
 ) -> Tuple[Optional[pd.DataFrame], Optional[pd.DataFrame], Optional[pd.DataFrame]]:
     """
     Load and aggregate all CFBD data.
@@ -132,12 +142,21 @@ def load_and_aggregate_cfbd_data(
         season: Year of the season
         season_type: Type of season ('regular' or 'postseason')
         data_dir: Directory containing CFBD data files
+        fetch_from_api: If True, fetch data from API instead of loading from files
+        api_key: CFBD API key (only used if fetch_from_api=True)
         
     Returns:
         Tuple of (games_df, team_info_df, team_stats_df)
     """
-    games_df = load_cfbd_games(season, season_type, data_dir)
-    team_info_df = load_cfbd_team_info(data_dir)
+    if fetch_from_api:
+        # Fetch from API
+        games_df = fetch_cfbd_games_from_api(season, season_type, api_key)
+        team_info_df = fetch_cfbd_team_info_from_api(api_key)
+    else:
+        # Load from files
+        games_df = load_cfbd_games(season, season_type, data_dir)
+        team_info_df = load_cfbd_team_info(data_dir)
+    
     team_stats_df = aggregate_team_games(games_df) if games_df is not None else None
     
     return games_df, team_info_df, team_stats_df
@@ -183,3 +202,151 @@ def merge_with_user_stats(
     merged.drop(['team_name_normalized', 'team_normalized'], axis=1, inplace=True)
     
     return merged
+
+
+def fetch_cfbd_games_from_api(
+    season: int,
+    season_type: str = "regular",
+    api_key: Optional[str] = None
+) -> Optional[pd.DataFrame]:
+    """
+    Fetch game data directly from CFBD API using the cfbd Python package.
+    
+    Args:
+        season: Year of the season (e.g., 2024)
+        season_type: Type of season ('regular' or 'postseason')
+        api_key: CFBD API key. If None, will try to get from CFBD_API_KEY environment variable
+        
+    Returns:
+        DataFrame with game data, or None if fetch fails
+    """
+    if not CFBD_AVAILABLE:
+        print("⚠ cfbd package not available. Install with: pip install cfbd")
+        return None
+    
+    # Get API key
+    if api_key is None:
+        api_key = os.getenv("CFBD_API_KEY")
+    
+    if not api_key:
+        print("⚠ CFBD_API_KEY not found in environment")
+        return None
+    
+    # Configure API client
+    configuration = cfbd.Configuration()
+    configuration.api_key['Authorization'] = api_key
+    configuration.api_key_prefix['Authorization'] = 'Bearer'
+    
+    # Create API instance
+    api_instance = cfbd.GamesApi(cfbd.ApiClient(configuration))
+    
+    try:
+        # Fetch games
+        games = api_instance.get_games(year=season, season_type=season_type)
+        
+        # Convert to list of dictionaries
+        games_data = [game.to_dict() for game in games]
+        
+        # Convert to DataFrame
+        return pd.DataFrame(games_data)
+        
+    except ApiException as e:
+        print(f"✗ Error fetching games from CFBD API: {e}")
+        return None
+    except Exception as e:
+        print(f"✗ Unexpected error fetching games: {e}")
+        return None
+
+
+def fetch_cfbd_team_info_from_api(api_key: Optional[str] = None) -> Optional[pd.DataFrame]:
+    """
+    Fetch team information directly from CFBD API using the cfbd Python package.
+    
+    Args:
+        api_key: CFBD API key. If None, will try to get from CFBD_API_KEY environment variable
+        
+    Returns:
+        DataFrame with team info, or None if fetch fails
+    """
+    if not CFBD_AVAILABLE:
+        print("⚠ cfbd package not available. Install with: pip install cfbd")
+        return None
+    
+    # Get API key
+    if api_key is None:
+        api_key = os.getenv("CFBD_API_KEY")
+    
+    if not api_key:
+        print("⚠ CFBD_API_KEY not found in environment")
+        return None
+    
+    # Configure API client
+    configuration = cfbd.Configuration()
+    configuration.api_key['Authorization'] = api_key
+    configuration.api_key_prefix['Authorization'] = 'Bearer'
+    
+    # Create API instance
+    api_instance = cfbd.TeamsApi(cfbd.ApiClient(configuration))
+    
+    try:
+        # Fetch teams
+        teams = api_instance.get_teams()
+        
+        # Convert to list of dictionaries
+        teams_data = [team.to_dict() for team in teams]
+        
+        # Convert to DataFrame
+        return pd.DataFrame(teams_data)
+        
+    except ApiException as e:
+        print(f"⚠ Warning: could not fetch team info from CFBD API: {e}")
+        return None
+    except Exception as e:
+        print(f"⚠ Unexpected error fetching team info: {e}")
+        return None
+
+
+def fetch_and_save_cfbd_data(
+    season: int,
+    season_type: str = "regular",
+    data_dir: str = "data/cfbd",
+    api_key: Optional[str] = None
+) -> Tuple[Optional[pd.DataFrame], Optional[pd.DataFrame]]:
+    """
+    Fetch CFBD data from API and save to files.
+    
+    Args:
+        season: Year of the season
+        season_type: Type of season ('regular' or 'postseason')
+        data_dir: Directory to save data files
+        api_key: CFBD API key. If None, will try to get from CFBD_API_KEY environment variable
+        
+    Returns:
+        Tuple of (games_df, team_info_df)
+    """
+    os.makedirs(data_dir, exist_ok=True)
+    
+    # Fetch games
+    games_df = fetch_cfbd_games_from_api(season, season_type, api_key)
+    
+    # Fetch team info
+    team_info_df = fetch_cfbd_team_info_from_api(api_key)
+    
+    # Save to files if fetch was successful
+    if games_df is not None:
+        prefix = os.path.join(data_dir, f"{season}_{season_type}")
+        games_csv = f"{prefix}_games.csv"
+        games_parquet = f"{prefix}_games.parquet"
+        games_df.to_csv(games_csv, index=False)
+        games_df.to_parquet(games_parquet, index=False)
+        print(f"✓ Saved games to {games_csv} and {games_parquet}")
+    
+    if team_info_df is not None:
+        team_info_csv = os.path.join(data_dir, "team_info.csv")
+        team_info_parquet = os.path.join(data_dir, "team_info.parquet")
+        team_info_df.to_csv(team_info_csv, index=False)
+        team_info_df.to_parquet(team_info_parquet, index=False)
+        print(f"✓ Saved team info to {team_info_csv} and {team_info_parquet}")
+    
+    return games_df, team_info_df
+
