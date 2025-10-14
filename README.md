@@ -63,6 +63,36 @@ pip install -e .
 
 Alternatively, you can run it in place with `python -m cfb_mismatch.cli`.
 
+### Analyzing the Integrated Stats
+
+The repository includes three stats files that have been integrated:
+- Defense coverage scheme statistics (man vs zone coverage)
+- Receiving concept statistics (screen, slot, etc.)
+- Receiving scheme statistics (man vs zone)
+
+To analyze these stats and generate team-level aggregations:
+
+```bash
+cfb-mismatch analyze
+```
+
+This will:
+- Load defense coverage scheme, receiving concept, and receiving scheme data
+- Aggregate player-level stats to team-level metrics
+- Generate team comparison reports in `data/out/`
+
+Output files include:
+- `team_defense_coverage.csv` – Team-level defensive coverage statistics
+- `team_receiving_concept.csv` – Team-level receiving concept metrics
+- `team_receiving_scheme.csv` – Team-level receiving scheme metrics
+- `team_summary.csv` – Combined summary with key metrics
+
+You can specify a custom output directory:
+
+```bash
+cfb-mismatch analyze --output-dir reports/analysis
+```
+
 ### Running the model
 
 To compute mismatch scores for week 7 of the 2025 season:

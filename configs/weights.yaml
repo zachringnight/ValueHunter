@@ -1,0 +1,33 @@
+# Feature weights for mismatch scoring
+
+# Base CFBD metrics weights
+base_weights:
+  epa: 0.3
+  success_rate: 0.2
+  explosiveness: 0.15
+  havoc: 0.2
+  pace: 0.15
+
+# Extended feature weights (when PFF/FantasyPoints data available)
+extended_weights:
+  ol_pass_protection: 0.2
+  dl_pass_rush: 0.2
+  run_concept_fit: 0.15
+  coverage_fit: 0.25
+  receiver_separation: 0.2
+
+# Stats file feature weights
+stats_weights:
+  # Defense coverage scheme
+  man_coverage_defense: 0.15
+  zone_coverage_defense: 0.15
+  man_qb_rating_against: 0.1
+  zone_qb_rating_against: 0.1
+  
+  # Receiving concept
+  screen_efficiency: 0.1
+  slot_efficiency: 0.1
+  
+  # Receiving scheme
+  man_receiving_efficiency: 0.15
+  zone_receiving_efficiency: 0.15
