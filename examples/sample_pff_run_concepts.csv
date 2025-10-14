@@ -1,0 +1,6 @@
+team,inside_zone_rate,outside_zone_rate,gap_rate,power_rate,inside_zone_epa,outside_zone_epa,gap_epa,power_epa
+Georgia,0.35,0.25,0.20,0.20,0.15,0.18,0.12,0.14
+Ohio State,0.40,0.22,0.18,0.20,0.16,0.20,0.14,0.15
+Alabama,0.32,0.28,0.22,0.18,0.14,0.19,0.13,0.12
+Michigan,0.38,0.20,0.25,0.17,0.17,0.16,0.15,0.13
+Texas,0.36,0.24,0.20,0.20,0.15,0.17,0.13,0.14
