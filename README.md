@@ -87,10 +87,29 @@ Output files include:
 - `team_receiving_scheme.csv` – Team-level receiving scheme metrics
 - `team_summary.csv` – Combined summary with key metrics
 
+#### Integrating with CFBD API Data
+
+You can combine your player-level stats with CFBD game data for a more complete analysis:
+
+```bash
+# 1. Fetch CFBD data (see "College Football data via cfbfastR" section below)
+export CFBD_API_KEY="your-key"
+Rscript scripts/fetch_cfb_data.R --season 2024 --season_type regular
+
+# 2. Run integrated analysis
+cfb-mismatch analyze --season 2024
+```
+
+This creates an integrated report that combines:
+- **Your player stats**: Coverage grades, receiving efficiency, scheme tendencies
+- **CFBD game data**: Win/loss records, points scored/allowed, game context
+
+The integrated summary adds team-level metrics like win percentage and point differential.
+
 You can specify a custom output directory:
 
 ```bash
-cfb-mismatch analyze --output-dir reports/analysis
+cfb-mismatch analyze --season 2024 --output-dir reports/analysis
 ```
 
 ### Running the model

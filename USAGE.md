@@ -32,6 +32,33 @@ This will generate team-level aggregations in `data/out/`:
 - `team_receiving_scheme.csv` - Receiving scheme metrics by team
 - `team_summary.csv` - Combined summary with key metrics
 
+#### Integrate with CFBD API Data
+
+If you have fetched CFBD data using the R script, you can integrate it with your analysis:
+
+```bash
+# First, fetch CFBD data (requires CFBD_API_KEY)
+export CFBD_API_KEY="your-api-key"
+Rscript scripts/fetch_cfb_data.R --season 2024 --season_type regular
+
+# Then analyze with integration
+cfb-mismatch analyze --season 2024
+```
+
+This will:
+- Load your player-level stats
+- Load CFBD game data (wins, losses, points scored/allowed)
+- Generate an integrated summary with both datasets
+- Include win percentage, point differential, and game context
+
+The integrated summary includes additional columns:
+- `games_played` - Number of games played
+- `wins` - Number of wins
+- `win_pct` - Win percentage
+- `avg_points_scored` - Average points scored per game
+- `avg_points_allowed` - Average points allowed per game
+- `point_differential` - Average point differential per game
+
 ### 3. View Results
 
 The summary report shows top-performing teams across different metrics:
@@ -52,6 +79,16 @@ TEXAS TECH            67.020690
    HOUSTON            66.604167
   BOISE ST            65.788889
      TULSA            65.629412
+```
+
+When CFBD data is integrated (using `--season`), you'll also see:
+
+```
+--- Top 5 Teams by Win Percentage ---
+ team_name  win_pct  wins  games_played
+   ALABAMA      1.0   1.0           1.0
+   GEORGIA      1.0   1.0           1.0
+     TEXAS      1.0   1.0           1.0
 ```
 
 ### 4. Custom Output Directory

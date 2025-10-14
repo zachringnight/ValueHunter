@@ -14,6 +14,12 @@ stats_paths:
   receiving_concept: "data/external/receiving_concept 2.csv"
   receiving_scheme: "data/external/receiving_scheme 2.csv"
 
+# CFBD data paths (created by R script via fetch_cfb_data.R)
+cfbd_paths:
+  data_dir: "data/cfbd"
+  # Games files will be: {data_dir}/{season}_{season_type}_games.csv
+  # Team info will be: {data_dir}/team_info.csv
+
 pff_paths:
   ol_dl: "data/external/pff_ol_dl.csv"
   def_front_cov: "data/external/pff_def_front_cov.csv"
