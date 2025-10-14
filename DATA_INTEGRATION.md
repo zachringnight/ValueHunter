@@ -52,14 +52,12 @@ This aggregates player-level data to team-level metrics and generates comparison
 
 **Fetching**:
 ```bash
-# Set API key
-export CFBD_API_KEY="your-key-here"
-
-# Fetch data for a season
+# Set up your API key (see README.md "Setting Up Your API Key" section)
+# Then fetch data for a season
 Rscript scripts/fetch_cfb_data.R --season 2024 --season_type regular
 ```
 
-Or via GitHub Actions workflow.
+Or via GitHub Actions workflow (requires API key set as repository secret).
 
 ## Integration Strategy
 
@@ -200,6 +198,8 @@ cfbd_paths:
 - Store `CFBD_API_KEY` as an environment variable
 - Use GitHub repository secrets for Actions workflows
 - Config file references `${CFBD_API_KEY}` which expands from environment
+
+For detailed instructions on setting up your API key, see the [Setting Up Your API Key](README.md#setting-up-your-api-key) section in README.md.
 
 ## Questions?
 

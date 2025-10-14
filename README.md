@@ -31,9 +31,8 @@ rush, passing game versus coverage, and an overall “tilt” score.
 
 1. **Python** – This package targets Python 3.9+.  Other versions may work but
    are untested.
-2. **CFBD API key** – Set the environment variable `CFBD_API_KEY` to your
-   [CollegeFootballData](https://collegefootballdata.com/) API token.  Without
-   a key the script cannot pull team metrics.
+2. **CFBD API key** – Required for fetching team metrics from CollegeFootballData API.
+   See the [Setting Up Your API Key](#setting-up-your-api-key) section below for detailed instructions.
 3. **Optional: PFF & FantasyPoints exports** – For a more comprehensive model,
    export the following CSV files and place them in `data/external/`:
 
@@ -52,6 +51,107 @@ rush, passing game versus coverage, and an overall “tilt” score.
    gracefully falls back to the base metrics only.
 
 > **💡 New to the integration?** Check out the [FAQ](FAQ.md) for common questions about integrating your stats files with CFBD API data.
+
+## Setting Up Your API Key
+
+The CFBD API key is required to fetch college football data. Here's how to set it up:
+
+### 1. Get Your API Key
+
+1. Visit https://collegefootballdata.com/key
+2. Sign up for a free account (if you don't have one)
+3. Generate your API key
+4. Copy the key - you'll need it in the next step
+
+### 2. Set the API Key in Your Environment
+
+Choose the method that works best for your situation:
+
+#### For a Single Session (Temporary)
+
+**On Linux/Mac:**
+```bash
+export CFBD_API_KEY="your-api-key-here"
+```
+
+**On Windows (Command Prompt):**
+```cmd
+set CFBD_API_KEY=your-api-key-here
+```
+
+**On Windows (PowerShell):**
+```powershell
+$env:CFBD_API_KEY="your-api-key-here"
+```
+
+#### Make It Permanent (Recommended for Local Development)
+
+**On Linux/Mac:**
+
+Add the export line to your shell configuration file:
+```bash
+# For bash users (add to ~/.bashrc or ~/.bash_profile)
+echo 'export CFBD_API_KEY="your-api-key-here"' >> ~/.bashrc
+source ~/.bashrc
+
+# For zsh users (add to ~/.zshrc)
+echo 'export CFBD_API_KEY="your-api-key-here"' >> ~/.zshrc
+source ~/.zshrc
+```
+
+**On Windows:**
+
+1. Search for "Environment Variables" in Windows settings
+2. Click "Edit the system environment variables"
+3. Click "Environment Variables" button
+4. Under "User variables", click "New"
+5. Variable name: `CFBD_API_KEY`
+6. Variable value: your API key
+7. Click OK and restart your terminal
+
+**For R Users:**
+
+If you're using the R scripts, you can add to your `~/.Renviron` file:
+```bash
+echo 'CFBD_API_KEY=your-api-key-here' >> ~/.Renviron
+```
+Then restart R.
+
+#### For GitHub Actions (Automated Workflows)
+
+If you want to use GitHub Actions to fetch data automatically:
+
+1. Go to your repository on GitHub
+2. Navigate to: Settings → Secrets and variables → Actions
+3. Click "New repository secret"
+4. Name: `CFBD_API_KEY`
+5. Value: your API key from step 1
+6. Click "Add secret"
+
+### 3. Verify Your Setup
+
+Test that your API key is set correctly:
+
+**On Linux/Mac:**
+```bash
+echo $CFBD_API_KEY
+```
+
+**On Windows (Command Prompt):**
+```cmd
+echo %CFBD_API_KEY%
+```
+
+**On Windows (PowerShell):**
+```powershell
+echo $env:CFBD_API_KEY
+```
+
+You should see your API key printed. If it's empty, revisit step 2.
+
+### Security Note
+
+⚠️ **Never commit your API key to the repository!** The key should only be stored as an environment variable or in GitHub repository secrets. The `.gitignore` file is configured to prevent accidental commits of sensitive data.
 
 ### Installation
 
@@ -94,8 +194,8 @@ Output files include:
 You can combine your player-level stats with CFBD game data for a more complete analysis:
 
 ```bash
-# 1. Fetch CFBD data (see "College Football data via cfbfastR" section below)
-export CFBD_API_KEY="your-key"
+# 1. Set up your API key (see "Setting Up Your API Key" section above)
+# Then fetch CFBD data
 Rscript scripts/fetch_cfb_data.R --season 2024 --season_type regular
 
 # 2. Run integrated analysis
@@ -176,15 +276,19 @@ data at a time, you can iterate quickly.
 
 This repo includes a simple, secure pipeline to fetch College Football data using the R package [cfbfastR](https://cfbfastR.sportsdataverse.org/), which wraps the [CollegeFootballData API](https://collegefootballdata.com/).
 
-**Important: Never commit API keys.**
+**Important: Never commit API keys.** See the [Setting Up Your API Key](#setting-up-your-api-key) section for proper setup instructions.
 
-### 1. Add your API key as a GitHub repository secret
+### 1. Set Up Your API Key
 
-- Go to: Settings → Secrets and variables → Actions → New repository secret
-- Name: `CFBD_API_KEY`
-- Value: your key from https://collegefootballdata.com/key
+Before fetching data, you need to configure your CFBD API key. See the detailed [Setting Up Your API Key](#setting-up-your-api-key) section above for complete instructions on:
+- Getting your API key from https://collegefootballdata.com/key
+- Setting it as an environment variable
+- Making it persistent across sessions
+- Setting it up for GitHub Actions
 
-### 2. Run the data fetch workflow
+### 2. Run the data fetch workflow (GitHub Actions)
+
+Once your API key is set up as a repository secret:
 
 - Navigate to the Actions tab → "Fetch CFB data (cfbfastR)"
 - Click "Run workflow"
@@ -193,6 +297,8 @@ This repo includes a simple, secure pipeline to fetch College Football data usin
 
 ### 3. Run locally (optional)
 
+Once your API key is set up in your environment:
+
 - Install R (https://cloud.r-project.org) and optionally RStudio
 - Install packages in an R console:
   ```r
@@ -200,12 +306,7 @@ This repo includes a simple, secure pipeline to fetch College Football data usin
   if (!requireNamespace("remotes", quietly = TRUE)) install.packages("remotes")
   remotes::install_github("sportsdataverse/cfbfastR")
   ```
-- Provide your API key in your environment. In R, you can do this temporarily for a session:
-  ```r
-  Sys.setenv(CFBD_API_KEY = "YOUR-KEY-HERE")
-  ```
-  Or add `CFBD_API_KEY=YOUR-KEY-HERE` to your `~/.Renviron` and restart R.
-- Run the script:
+- Run the script (the API key will be read from your environment):
   ```bash
   Rscript scripts/fetch_cfb_data.R --season 2024 --season_type regular
   ```

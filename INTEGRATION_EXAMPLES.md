@@ -27,10 +27,8 @@ cfb-mismatch analyze --output-dir reports/week12
 If you want to fetch game data from the CFBD API:
 
 ```bash
-# Set your API key (get one at https://collegefootballdata.com/key)
-export CFBD_API_KEY="your-api-key-here"
-
-# Fetch data for 2024 regular season
+# First, set up your API key (see README.md "Setting Up Your API Key" section)
+# Then fetch data for 2024 regular season
 Rscript scripts/fetch_cfb_data.R --season 2024 --season_type regular
 
 # Fetch postseason data
@@ -52,8 +50,8 @@ Rscript scripts/fetch_cfb_data.R --season 2023 --season_type regular
 Combine your player-level stats with CFBD game data for comprehensive analysis:
 
 ```bash
-# Step 1: Fetch CFBD data
-export CFBD_API_KEY="your-api-key"
+# Step 1: Set up your API key (see README.md "Setting Up Your API Key" section)
+# Then fetch CFBD data
 Rscript scripts/fetch_cfb_data.R --season 2024 --season_type regular
 
 # Step 2: Run integrated analysis
@@ -233,10 +231,10 @@ Rscript scripts/fetch_cfb_data.R --season 2024 --season_type regular
 ```
 
 ### "Missing CFBD_API_KEY"
-Set your API key:
-```bash
-export CFBD_API_KEY="your-key-here"
-```
+Your API key is not set as an environment variable. See the detailed [Setting Up Your API Key](README.md#setting-up-your-api-key) section in README.md for platform-specific instructions on:
+- Getting your API key from https://collegefootballdata.com/key
+- Setting it temporarily or permanently
+- Verifying your setup
 
 ### Team names don't match
 Team names are normalized (uppercase, trimmed) during merging. If some teams don't match, you may need to check the team name format in both data sources.
