@@ -19,6 +19,10 @@ from cfb_mismatch.adapters.receiving_scheme import (
     load_receiving_scheme,
     aggregate_receiving_scheme_by_team
 )
+from cfb_mismatch.adapters.cfbd_data import (
+    load_and_aggregate_cfbd_data,
+    merge_with_user_stats
+)
 
 
 def load_config(config_path: str = "configs/settings.yaml") -> Dict:
@@ -84,6 +88,54 @@ def load_all_stats(config: Dict) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFra
                 print(f"✗ Failed to load receiving scheme: {e}")
     
     return defense_df, receiving_concept_df, receiving_scheme_df
+
+
+def load_cfbd_data(
+    season: Optional[int] = None,
+    season_type: str = "regular",
+    data_dir: Optional[str] = None
+) -> Tuple[Optional[pd.DataFrame], Optional[pd.DataFrame], Optional[pd.DataFrame]]:
+    """
+    Load CFBD API data (games, team info, aggregated stats).
+    
+    Args:
+        season: Year of season to load (required)
+        season_type: 'regular' or 'postseason'
+        data_dir: Directory containing CFBD data files
+        
+    Returns:
+        Tuple of (games_df, team_info_df, team_stats_df)
+    """
+    if season is None:
+        print("⚠ No season specified for CFBD data, skipping")
+        return None, None, None
+    
+    if data_dir is None:
+        data_dir = "data/cfbd"
+    
+    try:
+        games_df, team_info_df, team_stats_df = load_and_aggregate_cfbd_data(
+            season, season_type, data_dir
+        )
+        
+        if games_df is not None:
+            print(f"✓ Loaded {len(games_df)} CFBD games for {season} {season_type} season")
+        else:
+            print(f"⚠ No CFBD games data found for {season} {season_type} season")
+            
+        if team_info_df is not None:
+            print(f"✓ Loaded CFBD team info for {len(team_info_df)} teams")
+        else:
+            print(f"⚠ No CFBD team info found")
+            
+        if team_stats_df is not None:
+            print(f"✓ Aggregated CFBD stats for {len(team_stats_df)} teams")
+        
+        return games_df, team_info_df, team_stats_df
+        
+    except Exception as e:
+        print(f"✗ Failed to load CFBD data: {e}")
+        return None, None, None
 
 
 def compute_team_stats(
@@ -185,3 +237,28 @@ def generate_summary_report(team_stats: Dict[str, pd.DataFrame]) -> pd.DataFrame
         summary_data.append(team_row)
     
     return pd.DataFrame(summary_data)
+
+
+def generate_integrated_report(
+    team_stats: Dict[str, pd.DataFrame],
+    cfbd_team_stats: Optional[pd.DataFrame] = None
+) -> pd.DataFrame:
+    """
+    Generate an integrated report combining user stats and CFBD data.
+    
+    Args:
+        team_stats: Dictionary of user team statistics DataFrames
+        cfbd_team_stats: Optional CFBD aggregated team statistics
+        
+    Returns:
+        Combined summary DataFrame with both user and CFBD metrics
+    """
+    # Start with user stats summary
+    summary = generate_summary_report(team_stats)
+    
+    # If CFBD data is available, merge it
+    if cfbd_team_stats is not None and not cfbd_team_stats.empty:
+        summary = merge_with_user_stats(summary, cfbd_team_stats, 'team_name')
+        print(f"✓ Integrated CFBD data for {len(summary)} teams")
+    
+    return summary
