@@ -34,9 +34,9 @@ This aggregates player-level data to team-level metrics and generates comparison
 
 ### 2. CFBD API Data (Team-Level)
 
-**Location**: `data/cfbd/` (created by R script)
+**Location**: `data/cfbd/` (created by Python script)
 
-**Source**: CollegeFootballData API via cfbfastR package
+**Source**: CollegeFootballData API via cfbd Python package
 
 **Files Generated**:
 - `{season}_{type}_games.csv` - Game results and scores
@@ -53,8 +53,13 @@ This aggregates player-level data to team-level metrics and generates comparison
 **Fetching**:
 ```bash
 # Set up your API key (see README.md "Setting Up Your API Key" section)
-# Then fetch data for a season
-Rscript scripts/fetch_cfb_data.R --season 2024 --season_type regular
+export CFBD_API_KEY="your-api-key-here"
+
+# Fetch using the CLI command
+cfb-mismatch fetch-cfbd --season 2024 --season-type regular
+
+# OR use the standalone script
+python scripts/fetch_cfb_data.py --season 2024 --season_type regular
 ```
 
 Or via GitHub Actions workflow (requires API key set as repository secret).
@@ -73,12 +78,18 @@ The two data sources are **complementary**:
 1. **Fetch CFBD data** for the season/games you want to analyze:
    ```bash
    export CFBD_API_KEY="your-key"
-   Rscript scripts/fetch_cfb_data.R --season 2024 --season_type regular
+   cfb-mismatch fetch-cfbd --season 2024 --season-type regular
+   
+   # Or use the standalone script
+   python scripts/fetch_cfb_data.py --season 2024 --season_type regular
    ```
 
 2. **Analyze user stats** to generate team-level aggregations:
    ```bash
    cfb-mismatch analyze
+   
+   # Or analyze and fetch CFBD data in one step
+   cfb-mismatch analyze --season 2024 --fetch-cfbd
    ```
 
 3. **Combine outputs** for comprehensive analysis:
@@ -108,9 +119,9 @@ The two data sources are **complementary**:
               │                           │
               ▼                           ▼
    ┌──────────────────────┐    ┌─────────────────────┐
-   │  Python Adapters     │    │  R Script           │
-   │  (cfb_mismatch/      │    │  (fetch_cfb_data.R) │
-   │   adapters/)         │    │                     │
+   │  Python Adapters     │    │  Python Script      │
+   │  (cfb_mismatch/      │    │  (fetch_cfb_data.py)│
+   │   adapters/)         │    │  + cfbd package     │
    └──────────┬───────────┘    └─────────┬───────────┘
               │                           │
               │                           │
@@ -182,9 +193,10 @@ cfbd_paths:
    - Command: `cfb-mismatch matchup --team1 "Alabama" --team2 "Georgia"`
 
 3. **CFBD Data Adapter**
-   - Python adapter to load CFBD CSV/Parquet files
-   - Merge with user stats by team name
-   - Expose via Python API
+   - ✅ Python adapter to load CFBD CSV/Parquet files
+   - ✅ Direct API fetching using cfbd Python package
+   - ✅ Merge with user stats by team name
+   - ✅ Expose via Python API and CLI commands
 
 4. **Weekly Analysis Pipeline**
    - Fetch current week's games from CFBD
