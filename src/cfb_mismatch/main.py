@@ -191,7 +191,80 @@ def save_team_stats(team_stats: Dict[str, pd.DataFrame], output_dir: str = "data
         print(f"✓ Saved {output_path}")
 
 
-def generate_summary_report(team_stats: Dict[str, pd.DataFrame]) -> pd.DataFrame:
+def _normalize_metric(series: pd.Series, higher_is_better: bool = True) -> pd.Series:
+    """Normalize a metric to the range [-1, 1] using percentile ranks."""
+
+    if series is None:
+        return pd.Series(dtype=float)
+
+    if series.empty:
+        return pd.Series([0.0] * len(series), index=series.index, dtype=float)
+
+    ranked = series.rank(pct=True, na_option='keep')
+    if not higher_is_better:
+        ranked = 1 - ranked
+
+    scaled = (ranked - 0.5) * 2
+    return scaled.fillna(0.0)
+
+
+def _compute_weighted_scores(summary: pd.DataFrame, weights: Optional[Dict]) -> pd.DataFrame:
+    """Apply feature weights to compute a mismatch score for each team."""
+
+    if weights is None:
+        return summary
+
+    stats_weights = (weights or {}).get('stats_weights', {})
+    if not stats_weights:
+        return summary
+
+    metric_map = {
+        'man_coverage_defense': ('man_coverage_grade', True),
+        'zone_coverage_defense': ('zone_coverage_grade', True),
+        'man_qb_rating_against': ('man_qb_rating_against', False),
+        'zone_qb_rating_against': ('zone_qb_rating_against', False),
+        'screen_efficiency': ('screen_yprr', True),
+        'slot_efficiency': ('slot_yprr', True),
+        'man_receiving_efficiency': ('man_yprr', True),
+        'zone_receiving_efficiency': ('zone_yprr', True),
+    }
+
+    score = pd.Series(0.0, index=summary.index)
+    weight_total = 0.0
+
+    for weight_key, weight_value in stats_weights.items():
+        metric = metric_map.get(weight_key)
+        if metric is None:
+            continue
+
+        column, higher_is_better = metric
+        if column not in summary.columns:
+            continue
+
+        column_values = pd.to_numeric(summary[column], errors='coerce')
+        normalized = _normalize_metric(column_values, higher_is_better)
+        score += normalized * weight_value
+        summary[f"{column}_score"] = normalized * weight_value
+        weight_total += weight_value
+
+    if weight_total > 0:
+        summary['mismatch_score'] = score / weight_total
+    else:
+        summary['mismatch_score'] = 0.0
+
+    try:
+        summary['mismatch_tier'] = pd.qcut(
+            summary['mismatch_score'],
+            q=5,
+            labels=['Very Low', 'Low', 'Moderate', 'High', 'Elite']
+        )
+    except ValueError:
+        summary['mismatch_tier'] = 'Moderate'
+
+    return summary
+
+
+def generate_summary_report(team_stats: Dict[str, pd.DataFrame], weights: Optional[Dict] = None) -> pd.DataFrame:
     """
     Generate a summary report combining key metrics from all categories.
     
@@ -221,7 +294,9 @@ def generate_summary_report(team_stats: Dict[str, pd.DataFrame]) -> pd.DataFrame
                 team_row['zone_coverage_grade'] = team_defense['zone_grades_coverage_defense'].values[0]
                 team_row['man_qb_rating_against'] = team_defense['man_qb_rating_against'].values[0]
                 team_row['zone_qb_rating_against'] = team_defense['zone_qb_rating_against'].values[0]
-        
+                team_row['defense_player_count'] = int(team_defense['player_count'].values[0])
+                team_row['defense_games_tracked'] = float(team_defense['player_game_count_total'].values[0])
+
         # Add key receiving concept metrics
         if 'receiving_concept' in team_stats:
             concept = team_stats['receiving_concept']
@@ -229,7 +304,9 @@ def generate_summary_report(team_stats: Dict[str, pd.DataFrame]) -> pd.DataFrame
             if not team_concept.empty:
                 team_row['screen_yprr'] = team_concept['screen_yprr'].values[0]
                 team_row['slot_yprr'] = team_concept['slot_yprr'].values[0]
-        
+                team_row['receiving_concept_player_count'] = int(team_concept['player_count'].values[0])
+                team_row['receiving_concept_games_tracked'] = float(team_concept['player_game_count_total'].values[0])
+
         # Add key receiving scheme metrics
         if 'receiving_scheme' in team_stats:
             scheme = team_stats['receiving_scheme']
@@ -237,15 +314,27 @@ def generate_summary_report(team_stats: Dict[str, pd.DataFrame]) -> pd.DataFrame
             if not team_scheme.empty:
                 team_row['man_yprr'] = team_scheme['man_yprr'].values[0]
                 team_row['zone_yprr'] = team_scheme['zone_yprr'].values[0]
+                team_row['receiving_scheme_player_count'] = int(team_scheme['player_count'].values[0])
+                team_row['receiving_scheme_games_tracked'] = float(team_scheme['player_game_count_total'].values[0])
         
         summary_data.append(team_row)
     
-    return pd.DataFrame(summary_data)
+    summary_df = pd.DataFrame(summary_data)
+    if summary_df.empty:
+        return summary_df
+
+    summary_df = _compute_weighted_scores(summary_df, weights)
+
+    if 'mismatch_score' in summary_df.columns:
+        summary_df = summary_df.sort_values('mismatch_score', ascending=False).reset_index(drop=True)
+
+    return summary_df
 
 
 def generate_integrated_report(
     team_stats: Dict[str, pd.DataFrame],
-    cfbd_team_stats: Optional[pd.DataFrame] = None
+    cfbd_team_stats: Optional[pd.DataFrame] = None,
+    weights: Optional[Dict] = None
 ) -> pd.DataFrame:
     """
     Generate an integrated report combining user stats and CFBD data.
@@ -258,7 +347,7 @@ def generate_integrated_report(
         Combined summary DataFrame with both user and CFBD metrics
     """
     # Start with user stats summary
-    summary = generate_summary_report(team_stats)
+    summary = generate_summary_report(team_stats, weights)
     
     # If CFBD data is available, merge it
     if cfbd_team_stats is not None and not cfbd_team_stats.empty:

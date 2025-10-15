@@ -184,10 +184,10 @@ This will:
 - Generate team comparison reports in `data/out/`
 
 Output files include:
-- `team_defense_coverage.csv` – Team-level defensive coverage statistics
-- `team_receiving_concept.csv` – Team-level receiving concept metrics
-- `team_receiving_scheme.csv` – Team-level receiving scheme metrics
-- `team_summary.csv` – Combined summary with key metrics
+- `team_defense_coverage.csv` – Team-level defensive coverage statistics (player-game weighted)
+- `team_receiving_concept.csv` – Team-level receiving concept metrics (player-game weighted)
+- `team_receiving_scheme.csv` – Team-level receiving scheme metrics (player-game weighted)
+- `team_summary.csv` – Combined summary with key metrics plus an overall `mismatch_score` and tier
 
 #### Integrating with CFBD API Data
 

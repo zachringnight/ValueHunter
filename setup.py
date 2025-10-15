@@ -28,6 +28,7 @@ setup(
         "pandas>=1.5.0",
         "pyyaml>=6.0",
         "requests>=2.28.0",
+        "numpy>=1.24.0",
     ],
     entry_points={
         "console_scripts": [
