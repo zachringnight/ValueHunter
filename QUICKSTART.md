@@ -11,6 +11,15 @@ pip install -e .
 
 ### Step 2: Run
 ```bash
+# Choose one of these methods:
+
+# Method 1: Simple Python script
+python run_model.py
+
+# Method 2: Simple bash script
+./run_model.sh
+
+# Method 3: CLI command
 cfb-mismatch analyze
 ```
 
@@ -50,9 +59,15 @@ NOTRE DAME        0.599265         Elite
 
 ## Try the Demo
 
-Run the included demo script to see everything in action:
+Run one of the included scripts to see everything in action:
 ```bash
+# Option 1: Comprehensive demo
 ./demo_run.sh
+
+# Option 2: Quick run scripts
+python run_model.py
+# or
+./run_model.sh
 ```
 
 ## Next Steps
