@@ -69,7 +69,7 @@ jobs:
 
       # Optional: push results to Notion if credentials are available
       - name: Push Top 10 mismatches to Notion
-        if: ${{ secrets.NOTION_TOKEN != '' && secrets.NOTION_DATABASE_ID != '' }}
+
         env:
           NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
           NOTION_DATABASE_ID: ${{ secrets.NOTION_DATABASE_ID }}
