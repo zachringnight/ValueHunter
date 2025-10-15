@@ -1,4 +1,7 @@
 name: Fetch CFB data (Direct API)
+# This workflow fetches college football data from the CFBD API.
+# Required: Repository secret CFBD_API_KEY must be configured.
+# See: .github/SETUP_REPOSITORY_SECRET.md for setup instructions.
 
 on:
   workflow_dispatch:
