@@ -12,6 +12,27 @@ import requests
 from typing import Optional, Tuple
 
 
+# Helper to normalize CFBD games columns to snake_case expected by this package
+# Handles both API (camelCase) and previously saved files
+# Only renames the columns used downstream
+_DEF_GAMES_COL_MAP = {
+    'homeTeam': 'home_team',
+    'awayTeam': 'away_team',
+    'homePoints': 'home_points',
+    'awayPoints': 'away_points',
+    'id': 'game_id'
+}
+
+def _normalize_games_columns(df: Optional[pd.DataFrame]) -> Optional[pd.DataFrame]:
+    if df is None or df.empty:
+        return df
+    # Build a mapping only for columns that exist in the dataframe
+    rename_map = {c: _DEF_GAMES_COL_MAP[c] for c in _DEF_GAMES_COL_MAP.keys() if c in df.columns}
+    if rename_map:
+        df = df.rename(columns=rename_map)
+    return df
+
+
 def load_cfbd_games(
     season: int,
     season_type: str = "regular",
@@ -33,9 +54,11 @@ def load_cfbd_games(
     parquet_path = os.path.join(data_dir, f"{season}_{season_type}_games.parquet")
     
     if os.path.exists(csv_path):
-        return pd.read_csv(csv_path)
+        df = pd.read_csv(csv_path)
+        return _normalize_games_columns(df)
     elif os.path.exists(parquet_path):
-        return pd.read_parquet(parquet_path)
+        df = pd.read_parquet(parquet_path)
+        return _normalize_games_columns(df)
     else:
         return None
 
@@ -96,16 +119,26 @@ def aggregate_team_games(games_df: pd.DataFrame) -> pd.DataFrame:
     # Calculate wins
     all_games['win'] = (all_games['points_for'] > all_games['points_against']).astype(int)
     
-    # Aggregate by team
-    team_stats = all_games.groupby('team').agg({
-        'game_id': 'count',  # games played
-        'win': 'sum',        # wins
-        'points_for': 'mean',    # avg points scored
-        'points_against': 'mean', # avg points allowed
-    }).reset_index()
+    # Aggregate by team (handle missing game_id by falling back to row count)
+    group = all_games.groupby('team', as_index=False)
+    if 'game_id' in all_games.columns:
+        team_stats = group.agg({
+            'game_id': 'count',
+            'win': 'sum',
+            'points_for': 'mean',
+            'points_against': 'mean',
+        }).rename(columns={'game_id': 'games_played'})
+    else:
+        team_stats = group.agg({
+            'win': 'sum',
+            'points_for': 'mean',
+            'points_against': 'mean',
+        })
+        # If game_id missing, derive games_played from counts per team
+        counts = all_games.groupby('team').size().reset_index(name='games_played')
+        team_stats = team_stats.merge(counts, on='team', how='left')
     
     team_stats.rename(columns={
-        'game_id': 'games_played',
         'win': 'wins',
         'points_for': 'avg_points_scored',
         'points_against': 'avg_points_allowed'
@@ -240,7 +273,8 @@ def fetch_cfbd_games_from_api(
         
         # Convert to DataFrame
         games_data = response.json()
-        return pd.DataFrame(games_data)
+        df = pd.DataFrame(games_data)
+        return _normalize_games_columns(df)
         
     except requests.exceptions.RequestException as e:
         print(f"✗ Error fetching games from CFBD API: {e}")
@@ -320,6 +354,7 @@ def fetch_and_save_cfbd_data(
     
     # Save to files if fetch was successful
     if games_df is not None:
+        games_df = _normalize_games_columns(games_df)
         prefix = os.path.join(data_dir, f"{season}_{season_type}")
         games_csv = f"{prefix}_games.csv"
         games_parquet = f"{prefix}_games.parquet"
