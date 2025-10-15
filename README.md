@@ -32,6 +32,23 @@ rush, passing game versus coverage, and an overall “tilt” score.
 
 ## Quick start
 
+### Running the Model (Simplest Method)
+
+Once you have installed the package (see [Prerequisites](#prerequisites) and [Installation](#installation) below), you can run the model with a single command:
+
+```bash
+# Option 1: Using the Python script
+python run_model.py
+
+# Option 2: Using the bash script
+./run_model.sh
+
+# Option 3: Using the CLI directly
+cfb-mismatch analyze
+```
+
+All three methods will analyze the included stats files and generate team-level reports in `data/out/`.
+
 ### Prerequisites
 
 1. **Python** – This package targets Python 3.9+.  Other versions may work but
