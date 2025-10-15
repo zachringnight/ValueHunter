@@ -4,6 +4,7 @@ Command-line interface for CFB Mismatch Model.
 
 import argparse
 import sys
+import os
 from cfb_mismatch.main import (
     load_config,
     load_weights,
@@ -14,6 +15,7 @@ from cfb_mismatch.main import (
     generate_summary_report,
     generate_integrated_report
 )
+from cfb_mismatch.adapters.cfbd_data import fetch_and_save_cfbd_data
 
 
 def analyze_stats(args):
@@ -39,7 +41,15 @@ def analyze_stats(args):
         print(f"\nLoading CFBD data for season {args.season}...")
         season_type = getattr(args, 'season_type', 'regular')
         cfbd_data_dir = config.get('cfbd_paths', {}).get('data_dir', 'data/cfbd')
-        _, _, cfbd_team_stats = load_cfbd_data(args.season, season_type, cfbd_data_dir)
+        fetch_from_api = getattr(args, 'fetch_cfbd', False)
+        api_key = os.getenv("CFBD_API_KEY") if fetch_from_api else None
+        _, _, cfbd_team_stats = load_cfbd_data(
+            args.season, 
+            season_type, 
+            cfbd_data_dir, 
+            fetch_from_api=fetch_from_api,
+            api_key=api_key
+        )
     
     # Save team stats
     output_dir = args.output_dir or config.get('output_dir', 'data/out')
@@ -82,6 +92,44 @@ def analyze_stats(args):
             print(top_wins.to_string(index=False))
 
 
+def fetch_cfbd(args):
+    """Fetch CFBD data from API."""
+    print("\n=== CFB Mismatch Model - Fetch CFBD Data ===\n")
+    
+    # Load configuration to get data directory
+    config = load_config(args.config)
+    data_dir = args.data_dir or config.get('cfbd_paths', {}).get('data_dir', 'data/cfbd')
+    
+    # Get API key
+    api_key = args.api_key or os.getenv("CFBD_API_KEY")
+    if not api_key:
+        print("✗ Error: CFBD_API_KEY not found", file=sys.stderr)
+        print("Set it as an environment variable or pass via --api-key", file=sys.stderr)
+        sys.exit(1)
+    
+    print(f"Fetching CFBD data for season {args.season}, type: {args.season_type}")
+    print(f"Output directory: {data_dir}\n")
+    
+    # Fetch and save data
+    games_df, team_info_df = fetch_and_save_cfbd_data(
+        args.season,
+        args.season_type,
+        data_dir,
+        api_key
+    )
+    
+    if games_df is not None:
+        print(f"\n✓ Successfully fetched {len(games_df)} games")
+    else:
+        print("\n✗ Failed to fetch games data", file=sys.stderr)
+        sys.exit(1)
+    
+    if team_info_df is not None:
+        print(f"✓ Successfully fetched {len(team_info_df)} teams")
+    
+    print("\n=== Fetch Complete ===\n")
+
+
 def main():
     """Main CLI entry point."""
     parser = argparse.ArgumentParser(
@@ -121,7 +169,44 @@ def main():
         choices=['regular', 'postseason'],
         help='Type of season for CFBD data (default: regular)'
     )
+    analyze_parser.add_argument(
+        '--fetch-cfbd',
+        action='store_true',
+        help='Fetch CFBD data from API instead of loading from files'
+    )
     analyze_parser.set_defaults(func=analyze_stats)
+    
+    # Fetch CFBD data command
+    fetch_parser = subparsers.add_parser(
+        'fetch-cfbd',
+        help='Fetch CFBD data from API and save to files'
+    )
+    fetch_parser.add_argument(
+        '--config',
+        default='configs/settings.yaml',
+        help='Path to configuration file (default: configs/settings.yaml)'
+    )
+    fetch_parser.add_argument(
+        '--season',
+        type=int,
+        required=True,
+        help='Season year to fetch (e.g., 2024)'
+    )
+    fetch_parser.add_argument(
+        '--season-type',
+        default='regular',
+        choices=['regular', 'postseason'],
+        help='Type of season to fetch (default: regular)'
+    )
+    fetch_parser.add_argument(
+        '--data-dir',
+        help='Output directory for CFBD data (overrides config)'
+    )
+    fetch_parser.add_argument(
+        '--api-key',
+        help='CFBD API key (or set CFBD_API_KEY environment variable)'
+    )
+    fetch_parser.set_defaults(func=fetch_cfbd)
     
     # Parse arguments
     args = parser.parse_args()

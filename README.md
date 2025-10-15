@@ -195,11 +195,19 @@ You can combine your player-level stats with CFBD game data for a more complete 
 
 ```bash
 # 1. Set up your API key (see "Setting Up Your API Key" section above)
-# Then fetch CFBD data
-Rscript scripts/fetch_cfb_data.R --season 2024 --season_type regular
+export CFBD_API_KEY="your-api-key-here"
 
-# 2. Run integrated analysis
+# 2. Fetch CFBD data using the Python script
+cfb-mismatch fetch-cfbd --season 2024 --season-type regular
+
+# Or use the standalone Python script
+python scripts/fetch_cfb_data.py --season 2024 --season_type regular
+
+# 3. Run integrated analysis
 cfb-mismatch analyze --season 2024
+
+# Or fetch and analyze in one step
+cfb-mismatch analyze --season 2024 --fetch-cfbd
 ```
 
 This creates an integrated report that combines:
@@ -272,9 +280,9 @@ assembled.  Feel free to write your own analysis scripts to backtest and
 calibrate the model over 2021–2024.  Because the code uses a single week of
 data at a time, you can iterate quickly.
 
-## College Football data via cfbfastR
+## College Football data via Direct API Calls
 
-This repo includes a simple, secure pipeline to fetch College Football data using the R package [cfbfastR](https://cfbfastR.sportsdataverse.org/), which wraps the [CollegeFootballData API](https://collegefootballdata.com/).
+This repo includes a simple, secure pipeline to fetch College Football data using direct HTTP requests to the [CollegeFootballData API](https://collegefootballdata.com/) at https://api.collegefootballdata.com/
 
 **Important: Never commit API keys.** See the [Setting Up Your API Key](#setting-up-your-api-key) section for proper setup instructions.
 
@@ -286,36 +294,34 @@ Before fetching data, you need to configure your CFBD API key. See the detailed 
 - Making it persistent across sessions
 - Setting it up for GitHub Actions
 
-### 2. Run the data fetch workflow (GitHub Actions)
+### 2. Fetch data using Python
+
+Once your API key is set up, you can fetch data using the CLI or standalone script:
+
+```bash
+# Using the CLI command (recommended)
+cfb-mismatch fetch-cfbd --season 2024 --season-type regular
+
+# Or using the standalone script
+python scripts/fetch_cfb_data.py --season 2024 --season_type regular
+```
+
+This will fetch game data and team information and save them to `data/cfbd/` directory.
+
+### 3. Run the data fetch workflow (GitHub Actions)
 
 Once your API key is set up as a repository secret:
 
-- Navigate to the Actions tab → "Fetch CFB data (cfbfastR)"
+- Navigate to the Actions tab → "Fetch CFB data (Direct API)"
 - Click "Run workflow"
 - Provide a `season` (e.g., 2024) and optionally set `season_type` (regular or postseason)
 - The job will produce an artifact named like `cfb-data-<season>-<season_type>` containing Parquet and CSV files under `data/cfbd`.
-
-### 3. Run locally (optional)
-
-Once your API key is set up in your environment:
-
-- Install R (https://cloud.r-project.org) and optionally RStudio
-- Install packages in an R console:
-  ```r
-  install.packages(c("arrow"), repos = "https://cloud.r-project.org")
-  if (!requireNamespace("remotes", quietly = TRUE)) install.packages("remotes")
-  remotes::install_github("sportsdataverse/cfbfastR")
-  ```
-- Run the script (the API key will be read from your environment):
-  ```bash
-  Rscript scripts/fetch_cfb_data.R --season 2024 --season_type regular
-  ```
-- Outputs are written to `data/cfbd` as Parquet and CSV.
 
 ### Notes
 
 - Data files are git-ignored to keep the repository small. Download them from the Actions run artifacts or manage them locally.
 - If you hit API rate limits, try a smaller query or wait a bit and re-run.
+- The implementation uses direct HTTP requests to https://api.collegefootballdata.com/
 
 ## Additional Documentation
 
