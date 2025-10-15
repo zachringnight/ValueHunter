@@ -65,13 +65,20 @@ The repository comes with three stats files already loaded in `data/external/`:
 - `receiving_concept 2.csv` - Receiving concept metrics (screen, slot, etc.)
 - `receiving_scheme 2.csv` - Receiving scheme statistics (man vs zone)
 
-To analyze these files and generate team-level reports:
+To analyze these files and generate team-level reports, use any of these methods:
 
 ```bash
+# Method 1: Simple Python script
+python run_model.py
+
+# Method 2: Simple bash script
+./run_model.sh
+
+# Method 3: CLI command
 cfb-mismatch analyze
 ```
 
-**That's it!** This single command will:
+**That's it!** Any of these commands will:
 1. Load all three stats files
 2. Aggregate player-level stats to team-level metrics
 3. Calculate mismatch scores based on configured weights
@@ -438,8 +445,10 @@ If you encounter issues not covered in this guide:
 **Quick Reference Commands**
 
 ```bash
-# Basic analysis
-cfb-mismatch analyze
+# Basic analysis - choose one method
+python run_model.py           # Simple Python script
+./run_model.sh                # Simple bash script
+cfb-mismatch analyze          # Direct CLI command
 
 # Custom output location
 cfb-mismatch analyze --output-dir my_reports/
