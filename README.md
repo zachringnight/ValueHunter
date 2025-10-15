@@ -1,5 +1,10 @@
 # CFB Mismatch Model
 
+> **🚀 New to the model? Start here:**
+> - **[QUICKSTART.md](QUICKSTART.md)** - Run the model in 3 simple steps
+> - **[HOW_TO_RUN.md](HOW_TO_RUN.md)** - Complete step-by-step guide
+> - **[EXAMPLE_RUN.md](EXAMPLE_RUN.md)** - See what the output looks like
+
 This repository contains a Python package and command‑line interface for computing
 weekly position‑group mismatch scores for college football games.  It pulls
 play‑by‑play and team metrics from the CollegeFootballData API and optionally
