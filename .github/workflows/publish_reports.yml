@@ -1,0 +1,82 @@
+name: Publish Reports
+
+# Trigger this workflow manually via the GitHub UI (workflow_dispatch).
+# You can also schedule it by uncommenting the `schedule` section.
+on:
+  workflow_dispatch:
+    inputs:
+      season:
+        description: 'College football season year, e.g. 2025'
+        required: true
+        type: string
+      season_type:
+        description: 'Season type (regular or postseason)'
+        required: true
+        type: string
+        default: 'regular'
+  # Uncomment to run automatically every Friday at 6:00 AM PT (13:00 UTC)
+  # schedule:
+  #   - cron: '0 13 * * Fri'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install Python dependencies
+        run: |
+          pip install -r requirements.txt
+
+      - name: Fetch CFBD data
+        env:
+          CFBD_API_KEY: ${{ secrets.CFBD_API_KEY }}
+        run: |
+          # Attempt to use the cfb-mismatch CLI. If it's not available, fall back to the Python script.
+          if command -v cfb-mismatch >/dev/null 2>&1; then
+            cfb-mismatch fetch-cfbd --season ${{ inputs.season }} --season-type ${{ inputs.season_type }} || true
+          fi
+          if [ ! -f "data/cfbd/${{ inputs.season }}_${{ inputs.season_type }}_games.csv" ]; then
+            python scripts/fetch_cfb_data.py --season ${{ inputs.season }} --season_type ${{ inputs.season_type }}
+          fi
+
+      - name: Run integrated analysis
+        run: |
+          if command -v cfb-mismatch >/dev/null 2>&1; then
+            cfb-mismatch analyze --season ${{ inputs.season }} --season-type ${{ inputs.season_type }} --output-dir reports/weekly || true
+          fi
+          # Use Python API as a fallback
+          if [ ! -f "reports/weekly/team_summary.csv" ]; then
+            python -c "from src.cfb_mismatch.main import analyze; analyze(season=int('${{ inputs.season }}'), season_type='${{ inputs.season_type }}', output_dir='reports/weekly')"
+
+      - name: Generate Top 10 mismatches
+        run: |
+          python scripts/top_mismatches.py --season ${{ inputs.season }} --season-type ${{ inputs.season_type }} --cfbd-dir data/cfbd --summary-path reports/weekly/team_summary.csv --outdir reports/weekly
+
+      - name: Commit and push reports
+        uses: EndBug/add-and-commit@v9
+        with:
+          add: 'reports/'
+          message: "chore(reports): publish weekly integrated reports and Top-10 mismatches"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Optional: push results to Notion if credentials are available
+      - name: Push Top 10 mismatches to Notion
+        if: ${{ secrets.NOTION_TOKEN != '' && secrets.NOTION_DATABASE_ID != '' }}
+        env:
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          NOTION_DATABASE_ID: ${{ secrets.NOTION_DATABASE_ID }}
+        run: |
+          CSV_FILE=$(ls reports/weekly/top_mismatches_week_*\.csv | head -n 1 || true)
+          if [ -n "$CSV_FILE" ]; then
+            WEEK=$(echo "$CSV_FILE" | sed -E 's/.*top_mismatches_week_([0-9a-zA-Z]+)\.csv/\1/')
+            python scripts/push_to_notion.py --csv "$CSV_FILE" --season ${{ inputs.season }} --week "$WEEK"
+          else
+            echo "No mismatch CSV found; skipping Notion push."
