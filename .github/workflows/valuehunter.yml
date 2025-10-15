@@ -1,0 +1,91 @@
+name: ValueHunter Weekly Run
+
+on:
+  workflow_dispatch:
+    inputs:
+      season:
+        description: "CFB Season"
+        required: true
+        default: "2025"
+      week_tag:
+        description: "Output folder tag (default: YYYY-MM-DD)"
+        required: false
+  schedule:
+    # Wednesdays 9:00 AM PT (16:00 UTC). Adjust for DST as needed.
+    - cron: "0 16 * * 3"
+
+permissions:
+  contents: write
+
+jobs:
+  run-model:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/pyproject.toml', '**/requirements*.txt', 'setup.py') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install package (editable)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+
+      - name: Install parquet support
+        run: |
+          pip install -U fastparquet
+
+      - name: Compute week tag
+        id: meta
+        run: |
+          if [ -n "${{ github.event.inputs.week_tag }}" ]; then
+            echo "WEEK_TAG=${{ github.event.inputs.week_tag }}" >> $GITHUB_OUTPUT
+          else
+            echo "WEEK_TAG=$(date +%Y-%m-%d)" >> $GITHUB_OUTPUT
+          fi
+          if [ -n "${{ github.event.inputs.season }}" ]; then
+            echo "SEASON=${{ github.event.inputs.season }}" >> $GITHUB_OUTPUT
+          else
+            echo "SEASON=2025" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Run model
+        env:
+          CFBD_API_KEY: ${{ secrets.CFBD_API_KEY }}
+        run: |
+          mkdir -p "data/out/${{ steps.meta.outputs.WEEK_TAG }}"
+          cfb-mismatch analyze \
+            --season "${{ steps.meta.outputs.SEASON }}" \
+            --fetch-cfbd \
+            --output-dir "data/out/${{ steps.meta.outputs.WEEK_TAG }}"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: valuehunter-${{ steps.meta.outputs.WEEK_TAG }}
+          path: |
+            data/out/${{ steps.meta.outputs.WEEK_TAG }}/**/*.csv
+            data/out/${{ steps.meta.outputs.WEEK_TAG }}/**/*.parquet
+          if-no-files-found: ignore
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: vh-${{ steps.meta.outputs.WEEK_TAG }}
+          name: "ValueHunter Weekly — ${{ steps.meta.outputs.WEEK_TAG }}"
+          body: |
+            Automated weekly run for season ${{ steps.meta.outputs.SEASON }}.
+            Artifacts are attached here and uploaded as workflow artifacts.
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
