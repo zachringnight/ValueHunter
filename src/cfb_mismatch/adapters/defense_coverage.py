@@ -2,8 +2,8 @@
 Adapter for loading defense coverage scheme statistics.
 """
 
+import numpy as np
 import pandas as pd
-from typing import Optional
 
 
 def load_defense_coverage_scheme(file_path: str) -> pd.DataFrame:
@@ -34,25 +34,52 @@ def load_defense_coverage_scheme(file_path: str) -> pd.DataFrame:
 
 def aggregate_defense_by_team(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Aggregate defensive coverage stats by team.
-    
+    Aggregate defensive coverage stats by team using player-game counts as weights.
+
     Args:
-        df: DataFrame from load_defense_coverage_scheme
-        
+        df: DataFrame from ``load_defense_coverage_scheme``
+
     Returns:
-        DataFrame with team-level defensive coverage statistics
+        DataFrame with weighted team-level defensive coverage statistics
     """
-    # Identify numeric columns for aggregation
+
+    weight_col = 'player_game_count'
+    if weight_col not in df.columns:
+        raise ValueError("Expected 'player_game_count' column for weighting")
+
     numeric_cols = df.select_dtypes(include=['number']).columns.tolist()
-    
-    # Remove ID columns from aggregation
-    exclude_cols = ['player_id', 'franchise_id']
+    exclude_cols = {'player_id', 'franchise_id', weight_col}
     agg_cols = [col for col in numeric_cols if col not in exclude_cols]
-    
-    # Group by team and calculate weighted averages
-    team_stats = df.groupby('team_name')[agg_cols].mean().reset_index()
-    
-    # Add player count
-    team_stats['player_count'] = df.groupby('team_name').size().values
-    
-    return team_stats
+
+    grouped = df.groupby('team_name', dropna=True)
+    records = []
+
+    for team, group in grouped:
+        weights = group[weight_col].fillna(0)
+        weight_sum = weights.sum()
+        record = {
+            'team_name': team,
+            'player_count': len(group),
+            'player_game_count_total': weight_sum,
+        }
+
+        for col in agg_cols:
+            series = group[col]
+            mask = series.notna()
+            if not mask.any():
+                record[col] = np.nan
+                continue
+
+            values = series[mask]
+            w = weights[mask]
+            w_sum = w.sum()
+
+            if w_sum > 0:
+                record[col] = float((values * w).sum() / w_sum)
+            else:
+                record[col] = float(values.mean())
+
+        records.append(record)
+
+    team_stats = pd.DataFrame(records)
+    return team_stats.sort_values('team_name').reset_index(drop=True)

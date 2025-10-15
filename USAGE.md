@@ -27,10 +27,10 @@ cfb-mismatch analyze
 ```
 
 This will generate team-level aggregations in `data/out/`:
-- `team_defense_coverage.csv` - Defensive coverage statistics by team
-- `team_receiving_concept.csv` - Receiving concept metrics by team
-- `team_receiving_scheme.csv` - Receiving scheme metrics by team
-- `team_summary.csv` - Combined summary with key metrics
+- `team_defense_coverage.csv` - Defensive coverage statistics by team (player-game weighted)
+- `team_receiving_concept.csv` - Receiving concept metrics by team (player-game weighted)
+- `team_receiving_scheme.csv` - Receiving scheme metrics by team (player-game weighted)
+- `team_summary.csv` - Combined summary with key metrics and an overall `mismatch_score`
 
 #### Integrate with CFBD API Data
 
@@ -61,9 +61,18 @@ The integrated summary includes additional columns:
 
 ### 3. View Results
 
-The summary report shows top-performing teams across different metrics:
+The summary report surfaces the overall mismatch leaderboard (based on the weights in
+`configs/weights.yaml`) alongside the supporting coverage/receiving metrics:
 
 ```
+--- Top 5 Teams by Overall Mismatch Score ---
+ team_name  mismatch_score mismatch_tier
+   INDIANA        0.705147         Elite
+   ARIZONA        0.645588         Elite
+  MO STATE        0.616176         Elite
+     TEXAS        0.608088         Elite
+NOTRE DAME        0.599265         Elite
+
 --- Top 5 Teams by Man Coverage Grade ---
  team_name  man_coverage_grade
   DOMINION           66.095238

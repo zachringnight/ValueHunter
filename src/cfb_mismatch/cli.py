@@ -59,10 +59,10 @@ def analyze_stats(args):
     # Generate summary report
     print("\nGenerating summary report...")
     if cfbd_team_stats is not None:
-        summary = generate_integrated_report(team_stats, cfbd_team_stats)
+        summary = generate_integrated_report(team_stats, cfbd_team_stats, weights=weights)
         print("✓ Generated integrated report with CFBD data")
     else:
-        summary = generate_summary_report(team_stats)
+        summary = generate_summary_report(team_stats, weights=weights)
         print("✓ Generated summary report (user stats only)")
     
     summary_path = f"{output_dir}/team_summary.csv"
@@ -75,6 +75,11 @@ def analyze_stats(args):
     
     # Display top teams by various metrics
     if not summary.empty:
+        if 'mismatch_score' in summary.columns:
+            print("\n--- Top 5 Teams by Overall Mismatch Score ---")
+            top_mismatch = summary.nlargest(5, 'mismatch_score')[['team_name', 'mismatch_score', 'mismatch_tier']]
+            print(top_mismatch.to_string(index=False))
+
         print("\n--- Top 5 Teams by Man Coverage Grade ---")
         if 'man_coverage_grade' in summary.columns:
             top_man = summary.nlargest(5, 'man_coverage_grade')[['team_name', 'man_coverage_grade']]
