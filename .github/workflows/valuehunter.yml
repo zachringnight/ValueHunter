@@ -70,6 +70,23 @@ jobs:
             --fetch-cfbd \
             --output-dir "data/out/${{ steps.meta.outputs.WEEK_TAG }}"
 
+      - name: Generate Top 10 mismatches
+        run: |
+          python scripts/top_mismatches.py \
+            --season "${{ steps.meta.outputs.SEASON }}" \
+            --season-type regular \
+            --cfbd-dir data/cfbd \
+            --summary-path "data/out/${{ steps.meta.outputs.WEEK_TAG }}/team_summary.csv" \
+            --outdir "data/out/${{ steps.meta.outputs.WEEK_TAG }}"
+
+      - name: Commit and push reports
+        uses: EndBug/add-and-commit@v9
+        with:
+          add: 'data/out/${{ steps.meta.outputs.WEEK_TAG }}/'
+          message: "chore(reports): publish weekly ValueHunter analysis for ${{ steps.meta.outputs.WEEK_TAG }}"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -89,3 +106,17 @@ jobs:
             Artifacts are attached here and uploaded as workflow artifacts.
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Display Top 10 mismatches
+        run: |
+          MD_FILE=$(ls data/out/${{ steps.meta.outputs.WEEK_TAG }}/top_mismatches_week_*.md | head -n 1 || true)
+          if [ -n "$MD_FILE" ] && [ -f "$MD_FILE" ]; then
+            echo "=========================================="
+            echo "Top 10 Passing Mismatches - Week ${{ steps.meta.outputs.WEEK_TAG }}"
+            echo "=========================================="
+            cat "$MD_FILE"
+            echo ""
+            echo "Full report saved to: $MD_FILE"
+          else
+            echo "No mismatch report found."
+          fi
