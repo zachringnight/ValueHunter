@@ -44,6 +44,6 @@ def test_compute_weighted_scores_prioritizes_better_metrics():
     assert "mismatch_score" in scored.columns
     assert scored.loc[0, "team_name"] == "Alpha"
     assert scored.loc[0, "mismatch_score"] > scored.loc[1, "mismatch_score"]
-    assert all(
-        column.endswith("_score") for column in scored.columns if column.endswith("_score")
-    )
+    # Check that at least one score column was created
+    score_columns = [col for col in scored.columns if col.endswith("_score")]
+    assert len(score_columns) > 0
