@@ -70,6 +70,23 @@ jobs:
             --fetch-cfbd \
             --output-dir "data/out/${{ steps.meta.outputs.WEEK_TAG }}"
 
+      - name: Generate Top 10 mismatches
+        run: |
+          python scripts/top_mismatches.py \
+            --season "${{ steps.meta.outputs.SEASON }}" \
+            --season-type regular \
+            --cfbd-dir data/cfbd \
+            --summary-path "data/out/${{ steps.meta.outputs.WEEK_TAG }}/team_summary.csv" \
+            --outdir "data/out/${{ steps.meta.outputs.WEEK_TAG }}"
+
+      - name: Commit and push reports
+        uses: EndBug/add-and-commit@v9
+        with:
+          add: 'data/out/${{ steps.meta.outputs.WEEK_TAG }}/'
+          message: "chore(reports): publish weekly ValueHunter analysis for ${{ steps.meta.outputs.WEEK_TAG }}"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -89,3 +106,16 @@ jobs:
             Artifacts are attached here and uploaded as workflow artifacts.
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push Top 10 mismatches to Notion (optional)
+        env:
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          NOTION_DATABASE_ID: ${{ secrets.NOTION_DATABASE_ID }}
+        run: |
+          CSV_FILE=$(ls data/out/${{ steps.meta.outputs.WEEK_TAG }}/top_mismatches_week_*.csv | head -n 1 || true)
+          if [ -n "$CSV_FILE" ] && [ -n "$NOTION_TOKEN" ] && [ -n "$NOTION_DATABASE_ID" ]; then
+            WEEK=$(echo "$CSV_FILE" | sed -E 's/.*top_mismatches_week_([0-9a-zA-Z]+)\.csv/\1/')
+            python scripts/push_to_notion.py --csv "$CSV_FILE" --season "${{ steps.meta.outputs.SEASON }}" --week "$WEEK"
+          else
+            echo "Notion credentials not configured or no mismatch CSV found; skipping Notion push."
+          fi
