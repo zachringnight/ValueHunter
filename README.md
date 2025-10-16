@@ -49,6 +49,23 @@ cfb-mismatch analyze
 
 All three methods will analyze the included stats files and generate team-level reports in `data/out/`.
 
+## Running Tests
+
+The repository includes unit and integration tests that validate the weighted
+scoring helpers and ensure the CLI workflow produces the expected CSV outputs.
+
+```bash
+# Install development dependencies
+pip install -r requirements-dev.txt
+
+# Run the full test suite
+pytest
+```
+
+The integration test executes the same `cfb-mismatch analyze` command used in
+production but writes results to a temporary directory so you can confirm the
+pipeline works end-to-end without touching local output files.
+
 ### Prerequisites
 
 1. **Python** – This package targets Python 3.9+.  Other versions may work but
