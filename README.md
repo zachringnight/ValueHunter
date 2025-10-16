@@ -4,6 +4,10 @@
 > - **[QUICKSTART.md](QUICKSTART.md)** - Run the model in 3 simple steps
 > - **[HOW_TO_RUN.md](HOW_TO_RUN.md)** - Complete step-by-step guide
 > - **[EXAMPLE_RUN.md](EXAMPLE_RUN.md)** - See what the output looks like
+>
+> **🔧 Repository Administrators:**
+> - **[.github/ADMIN_QUICK_START.md](.github/ADMIN_QUICK_START.md)** - Setup GitHub Actions secrets
+> - **[.github/SETUP_REPOSITORY_SECRET.md](.github/SETUP_REPOSITORY_SECRET.md)** - Detailed secret configuration guide
 
 This repository contains a Python package and command‑line interface for computing
 weekly position‑group mismatch scores for college football games.  It pulls
@@ -166,6 +170,8 @@ If you want to use GitHub Actions to fetch data automatically:
 4. Name: `CFBD_API_KEY`
 5. Value: your API key from step 1
 6. Click "Add secret"
+
+> **📖 Repository Administrators**: See **[.github/SETUP_REPOSITORY_SECRET.md](.github/SETUP_REPOSITORY_SECRET.md)** for detailed instructions on configuring the repository secret.
 
 ### 3. Verify Your Setup
 
