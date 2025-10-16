@@ -30,6 +30,11 @@ setup(
         "requests>=2.28.0",
         "numpy>=1.24.0",
     ],
+    extras_require={
+        "dev": [
+            "pytest>=7.0",
+        ],
+    },
     entry_points={
         "console_scripts": [
             "cfb-mismatch=cfb_mismatch.cli:main",

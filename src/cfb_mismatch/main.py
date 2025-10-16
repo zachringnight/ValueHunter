@@ -200,6 +200,10 @@ def _normalize_metric(series: pd.Series, higher_is_better: bool = True) -> pd.Se
     if series.empty:
         return pd.Series([0.0] * len(series), index=series.index, dtype=float)
 
+    non_na = series.dropna()
+    if non_na.nunique() <= 1:
+        return pd.Series(0.0, index=series.index, dtype=float)
+
     ranked = series.rank(pct=True, na_option='keep')
     if not higher_is_better:
         ranked = 1 - ranked
