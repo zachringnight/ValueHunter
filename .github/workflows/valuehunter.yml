@@ -107,15 +107,16 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Push Top 10 mismatches to Notion (optional)
-        env:
-          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
-          NOTION_DATABASE_ID: ${{ secrets.NOTION_DATABASE_ID }}
+      - name: Display Top 10 mismatches
         run: |
-          CSV_FILE=$(ls data/out/${{ steps.meta.outputs.WEEK_TAG }}/top_mismatches_week_*.csv | head -n 1 || true)
-          if [ -n "$CSV_FILE" ] && [ -n "$NOTION_TOKEN" ] && [ -n "$NOTION_DATABASE_ID" ]; then
-            WEEK=$(echo "$CSV_FILE" | sed -E 's/.*top_mismatches_week_([0-9a-zA-Z]+)\.csv/\1/')
-            python scripts/push_to_notion.py --csv "$CSV_FILE" --season "${{ steps.meta.outputs.SEASON }}" --week "$WEEK"
+          MD_FILE=$(ls data/out/${{ steps.meta.outputs.WEEK_TAG }}/top_mismatches_week_*.md | head -n 1 || true)
+          if [ -n "$MD_FILE" ] && [ -f "$MD_FILE" ]; then
+            echo "=========================================="
+            echo "Top 10 Passing Mismatches - Week ${{ steps.meta.outputs.WEEK_TAG }}"
+            echo "=========================================="
+            cat "$MD_FILE"
+            echo ""
+            echo "Full report saved to: $MD_FILE"
           else
-            echo "Notion credentials not configured or no mismatch CSV found; skipping Notion push."
+            echo "No mismatch report found."
           fi
