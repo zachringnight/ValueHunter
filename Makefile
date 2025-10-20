@@ -58,7 +58,7 @@ analyze: run
 fetch-cfbd:
 	@if [ -z "$$CFBD_API_KEY" ]; then \
 		echo "Error: CFBD_API_KEY environment variable not set"; \
-		echo "Please set it first: export CFBD_API_KEY='your-key-here'"; \
+		echo "Please set it first: export CFBD_API_KEY=\"your-key-here\""; \
 		exit 1; \
 	fi
 	@echo "Fetching CFBD data..."
