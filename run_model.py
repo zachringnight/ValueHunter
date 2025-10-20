@@ -31,7 +31,7 @@ def run_cmd(cmd):
     print(f"$ {' '.join(cmd)}")
     try:
         result = subprocess.run(cmd, check=True)
-        return result.returncode or 0
+        return result.returncode
     except subprocess.CalledProcessError as e:
         return e.returncode or 1
     except FileNotFoundError:
