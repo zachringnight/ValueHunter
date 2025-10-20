@@ -1,0 +1,74 @@
+name: Run Model
+
+on:
+  workflow_dispatch:
+    inputs:
+      output_tag:
+        description: "Optional output folder tag (default: run-YYYY-MM-DD-HHMMSS)"
+        required: false
+  push:
+    branches:
+      - main
+    paths:
+      - 'src/**'
+      - 'configs/**'
+      - 'run_model.py'
+      - 'setup.py'
+      - 'requirements.txt'
+
+permissions:
+  contents: read
+
+jobs:
+  run-model:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements*.txt', 'setup.py') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install package
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+
+      - name: Compute output tag
+        id: meta
+        run: |
+          if [ -n "${{ github.event.inputs.output_tag }}" ]; then
+            echo "OUTPUT_TAG=${{ github.event.inputs.output_tag }}" >> $GITHUB_OUTPUT
+          else
+            echo "OUTPUT_TAG=run-$(date +%Y-%m-%d-%H%M%S)" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Run model analysis
+        run: |
+          mkdir -p "data/out/${{ steps.meta.outputs.OUTPUT_TAG }}"
+          cfb-mismatch analyze --output-dir "data/out/${{ steps.meta.outputs.OUTPUT_TAG }}"
+
+      - name: Verify outputs
+        run: |
+          echo "Checking output files in data/out/${{ steps.meta.outputs.OUTPUT_TAG }}/"
+          ls -lh "data/out/${{ steps.meta.outputs.OUTPUT_TAG }}/"
+          echo ""
+          echo "Generated files:"
+          find "data/out/${{ steps.meta.outputs.OUTPUT_TAG }}" -name "*.csv" -exec basename {} \;
+
+      - name: Upload results as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: model-results-${{ steps.meta.outputs.OUTPUT_TAG }}
+          path: data/out/${{ steps.meta.outputs.OUTPUT_TAG }}/**/*.csv
+          if-no-files-found: error
