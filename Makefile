@@ -70,9 +70,9 @@ fetch-cfbd:
 # Clean output files
 clean:
 	@echo "Cleaning output files..."
-	rm -rf data/out/*.csv
-	rm -rf data/cfbd/*.csv
-	rm -rf data/cfbd/*.parquet
+	@if [ -d data/out ]; then rm -f data/out/*.csv; fi
+	@if [ -d data/cfbd ]; then rm -f data/cfbd/*.csv; fi
+	@if [ -d data/cfbd ]; then rm -f data/cfbd/*.parquet; fi
 	@echo "✓ Output files cleaned"
 
 # Run tests
