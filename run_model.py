@@ -33,7 +33,7 @@ def run_cmd(cmd):
         result = subprocess.run(cmd, check=True)
         return result.returncode
     except subprocess.CalledProcessError as e:
-        return e.returncode or 1
+        return e.returncode
     except FileNotFoundError:
         return 127
 
