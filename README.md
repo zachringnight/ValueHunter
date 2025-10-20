@@ -401,6 +401,29 @@ Once your API key is set up as a repository secret:
 - Provide a `season` (e.g., 2024) and optionally set `season_type` (regular or postseason)
 - The job will produce an artifact named like `cfb-data-<season>-<season_type>` containing Parquet and CSV files under `data/cfbd`.
 
+## Running the Model via GitHub Actions
+
+The repository includes a simple GitHub Actions workflow to run the model analysis automatically. This is useful for CI/CD, testing, or running the model on GitHub's infrastructure.
+
+### Run Model Workflow
+
+The "Run Model" workflow analyzes the existing stats files and generates team-level reports:
+
+- Navigate to the Actions tab → "Run Model"
+- Click "Run workflow"
+- Optionally provide an `output_tag` to name the output folder (default: `run-YYYY-MM-DD-HHMMSS`)
+- The workflow will generate CSV files and upload them as artifacts
+
+The workflow also runs automatically on pushes to `main` that affect source code, configs, or dependencies, helping catch issues early.
+
+**Outputs:**
+- `team_summary.csv` - Combined summary with mismatch scores
+- `team_defense_coverage.csv` - Team-level defensive coverage statistics
+- `team_receiving_concept.csv` - Team-level receiving concept metrics
+- `team_receiving_scheme.csv` - Team-level receiving scheme metrics
+
+All outputs are uploaded as workflow artifacts and can be downloaded from the Actions run page.
+
 ### Notes
 
 - Data files are git-ignored to keep the repository small. Download them from the Actions run artifacts or manage them locally.
