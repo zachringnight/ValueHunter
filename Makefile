@@ -85,7 +85,7 @@ lint:
 	@echo "Running linting checks..."
 	@if command -v flake8 > /dev/null; then \
 		echo "Running flake8..."; \
-		flake8 src/ tests/ --max-line-length=120 --ignore=W503; \
+		flake8 src/ tests/ --max-line-length=120; \
 	else \
 		echo "flake8 not installed. Install with: pip install flake8"; \
 	fi
