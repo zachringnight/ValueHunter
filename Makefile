@@ -24,7 +24,7 @@ help:
 	@echo ""
 	@echo "Examples:"
 	@echo "  make install && make run              # Install and run"
-	@echo "  SEASON=2024 make fetch-cfbd           # Fetch 2024 data"
+	@echo "  SEASON=2025 make fetch-cfbd           # Fetch 2025 data"
 	@echo "  make fetch-cfbd && make run           # Fetch data and run"
 	@echo ""
 
@@ -62,7 +62,7 @@ fetch-cfbd:
 		exit 1; \
 	fi
 	@echo "Fetching CFBD data..."
-	@SEASON=$${SEASON:-2024}; \
+	@SEASON=$${SEASON:-2025}; \
 	SEASON_TYPE=$${SEASON_TYPE:-regular}; \
 	echo "Season: $$SEASON, Type: $$SEASON_TYPE"; \
 	cfb-mismatch fetch-cfbd --season $$SEASON --season-type $$SEASON_TYPE

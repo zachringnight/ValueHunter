@@ -483,7 +483,7 @@ make format           # Format code with black and isort
 ### Examples with Parameters
 ```bash
 # Fetch data for a specific season
-SEASON=2024 SEASON_TYPE=regular make fetch-cfbd
+SEASON=2025 SEASON_TYPE=regular make fetch-cfbd
 
 # Clean and run
 make clean && make run
