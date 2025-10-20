@@ -6,6 +6,11 @@
 ```bash
 git clone https://github.com/zachringnight/ValueHunter.git
 cd ValueHunter
+
+# Option 1: Using Make (recommended)
+make install
+
+# Option 2: Manual installation
 pip install -e .
 ```
 
@@ -13,13 +18,16 @@ pip install -e .
 ```bash
 # Choose one of these methods:
 
-# Method 1: Simple Python script
+# Method 1: Using Make (simplest!)
+make run
+
+# Method 2: Simple Python script
 python run_model.py
 
-# Method 2: Simple bash script
+# Method 3: Simple bash script
 ./run_model.sh
 
-# Method 3: CLI command
+# Method 4: CLI command
 cfb-mismatch analyze
 ```
 
@@ -79,7 +87,10 @@ python run_model.py
 ## Need Help?
 
 ```bash
-# Show all available commands
+# Show all available Make tasks
+make help
+
+# Show all available CLI commands
 cfb-mismatch --help
 
 # Show options for analyze command
@@ -90,6 +101,19 @@ cfb-mismatch fetch-cfbd --help
 ```
 
 ## Advanced Usage
+
+### Using Make Tasks
+```bash
+# Clean output files
+make clean
+
+# Run tests
+make test
+
+# Fetch CFBD data
+export CFBD_API_KEY="your-key"
+make fetch-cfbd
+```
 
 ### Custom Output Location
 ```bash

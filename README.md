@@ -41,17 +41,22 @@ rush, passing game versus coverage, and an overall “tilt” score.
 Once you have installed the package (see [Prerequisites](#prerequisites) and [Installation](#installation) below), you can run the model with a single command:
 
 ```bash
-# Option 1: Using the Python script
+# Option 1: Using Make (recommended – simplest method)
+make run
+
+# Option 2: Using the Python script
 python run_model.py
 
-# Option 2: Using the bash script
+# Option 3: Using the bash script
 ./run_model.sh
 
-# Option 3: Using the CLI directly
+# Option 4: Using the CLI directly
 cfb-mismatch analyze
 ```
 
-All three methods will analyze the included stats files and generate team-level reports in `data/out/`.
+All four methods will analyze the included stats files and generate team-level reports in `data/out/`.
+
+**New to Make?** The repository includes a `Makefile` with convenient tasks. Run `make help` to see all available commands.
 
 ## Running Tests
 
@@ -59,10 +64,12 @@ The repository includes unit and integration tests that validate the weighted
 scoring helpers and ensure the CLI workflow produces the expected CSV outputs.
 
 ```bash
-# Install development dependencies
-pip install -r requirements-dev.txt
+# Option 1: Using Make (recommended)
+make install-dev  # Install with dev dependencies
+make test         # Run the test suite
 
-# Run the full test suite
+# Option 2: Manual installation
+pip install -r requirements-dev.txt
 pytest
 ```
 
@@ -205,10 +212,42 @@ Clone this repository and install it in editable mode:
 ```bash
 git clone <your‑repo‑url> cfb-mismatch
 cd cfb-mismatch
+
+# Option 1: Using Make (recommended)
+make install
+
+# Option 2: Manual installation
 pip install -e .
 ```
 
 Alternatively, you can run it in place with `python -m cfb_mismatch.cli`.
+
+## Using Make Tasks
+
+The repository includes a `Makefile` with convenient commands for common tasks:
+
+```bash
+# See all available tasks
+make help
+
+# Install the package
+make install
+
+# Run the model
+make run
+
+# Run tests
+make test
+
+# Clean output files
+make clean
+
+# Fetch CFBD data (requires CFBD_API_KEY)
+export CFBD_API_KEY="your-key-here"
+make fetch-cfbd
+```
+
+For more details on each task, run `make help` or see the [Makefile](Makefile).
 
 ### Analyzing the Integrated Stats
 

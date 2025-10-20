@@ -40,6 +40,10 @@ cd ValueHunter
 
 ### Step 2: Install the Package
 ```bash
+# Option 1: Using Make (recommended)
+make install
+
+# Option 2: Manual installation
 pip install -e .
 ```
 
@@ -51,6 +55,10 @@ This will install the `cfb-mismatch` command-line tool and all required dependen
 
 ### Step 3: Verify Installation
 ```bash
+# Check Make tasks
+make help
+
+# Check CLI commands
 cfb-mismatch --help
 ```
 
@@ -68,13 +76,16 @@ The repository comes with three stats files already loaded in `data/external/`:
 To analyze these files and generate team-level reports, use any of these methods:
 
 ```bash
-# Method 1: Simple Python script
+# Method 1: Using Make (simplest!)
+make run
+
+# Method 2: Simple Python script
 python run_model.py
 
-# Method 2: Simple bash script
+# Method 3: Simple bash script
 ./run_model.sh
 
-# Method 3: CLI command
+# Method 4: CLI command
 cfb-mismatch analyze
 ```
 
@@ -83,6 +94,20 @@ cfb-mismatch analyze
 2. Aggregate player-level stats to team-level metrics
 3. Calculate mismatch scores based on configured weights
 4. Generate output files in `data/out/`
+
+### All Available Make Tasks
+
+Run `make help` to see all available tasks:
+
+```bash
+make help
+```
+
+This will show:
+- **Setup & Installation**: `make install`, `make install-dev`
+- **Running the Model**: `make run`, `make analyze`
+- **Data Management**: `make fetch-cfbd`, `make clean`
+- **Development**: `make test`, `make lint`, `make format`
 
 ### What Gets Generated
 
@@ -426,39 +451,96 @@ stats_paths:
 output_dir: "data/out"
 ```
 
+## Using Make Tasks
+
+The repository includes a `Makefile` that simplifies common tasks. Here are some useful commands:
+
+### Installation
+```bash
+make install          # Install package and dependencies
+make install-dev      # Install with development dependencies
+```
+
+### Running the Model
+```bash
+make run              # Run the model analysis
+make analyze          # Same as 'make run'
+```
+
+### Data Management
+```bash
+make clean            # Remove output files
+make fetch-cfbd       # Fetch CFBD data (requires CFBD_API_KEY)
+```
+
+### Development
+```bash
+make test             # Run the test suite
+make lint             # Run code linting
+make format           # Format code with black and isort
+```
+
+### Examples with Parameters
+```bash
+# Fetch data for a specific season
+SEASON=2025 SEASON_TYPE=regular make fetch-cfbd
+
+# Clean and run
+make clean && make run
+
+# Install, test, and run
+make install-dev && make test && make run
+```
+
+For a complete list of available tasks and their descriptions, run:
+```bash
+make help
+```
+
 ## Additional Resources
 
 - **[README.md](README.md)** - Full project documentation
 - **[USAGE.md](USAGE.md)** - Detailed usage examples
 - **[FAQ.md](FAQ.md)** - Common questions about integration
 - **[DATA_INTEGRATION.md](DATA_INTEGRATION.md)** - Data architecture details
+- **[Makefile](Makefile)** - All available Make tasks
 
 ## Support
 
 If you encounter issues not covered in this guide:
-1. Check the FAQ.md file
-2. Review existing GitHub issues
-3. Open a new issue with details about your problem
+1. Run `make help` to see all available tasks
+2. Check the FAQ.md file
+3. Review existing GitHub issues
+4. Open a new issue with details about your problem
 
 ---
 
 **Quick Reference Commands**
 
 ```bash
+# Using Make (recommended)
+make run                       # Run the model
+make clean                     # Clean output files
+make test                      # Run tests
+
 # Basic analysis - choose one method
-python run_model.py           # Simple Python script
-./run_model.sh                # Simple bash script
-cfb-mismatch analyze          # Direct CLI command
+make run                       # Using Make (simplest!)
+python run_model.py            # Simple Python script
+./run_model.sh                 # Simple bash script
+cfb-mismatch analyze           # Direct CLI command
 
 # Custom output location
 cfb-mismatch analyze --output-dir my_reports/
 
 # With CFBD integration
 export CFBD_API_KEY="your-key"
+make fetch-cfbd                # Using Make
+# or
 cfb-mismatch fetch-cfbd --season 2024 --season-type regular
 cfb-mismatch analyze --season 2024
 
 # Help
+make help                      # Show all Make tasks
 cfb-mismatch --help
 cfb-mismatch analyze --help
 cfb-mismatch fetch-cfbd --help
