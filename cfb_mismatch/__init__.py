@@ -8,8 +8,8 @@ from pathlib import Path
 _pkg_root = Path(__file__).resolve().parent.parent / "src" / "cfb_mismatch"
 if not _pkg_root.exists():
     raise ModuleNotFoundError(
-        "The implementation package could not be located. Expected to find it at"
-        f" {_pkg_root}."
+        "The implementation package could not be located. Expected to find it at "
+        f"{_pkg_root}."
     )
 
 # Ensure Python will search for submodules (e.g. ``cfb_mismatch.main``) in the
