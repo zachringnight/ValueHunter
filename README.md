@@ -41,7 +41,7 @@ rush, passing game versus coverage, and an overall “tilt” score.
 Once you have installed the package (see [Prerequisites](#prerequisites) and [Installation](#installation) below), you can run the model with a single command:
 
 ```bash
-# Option 1: Using Make (recommended - simplest!)
+# Option 1: Using Make (recommended – simplest method)
 make run
 
 # Option 2: Using the Python script
