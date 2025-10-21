@@ -1,6 +1,11 @@
 name: Run Model
 
 on:
+  # Automated weekly run every Monday at 8:00 AM UTC
+  # This ensures regular model runs for continuous validation and early issue detection
+  # Schedule chosen to run on Mondays, complementing the Wednesday ValueHunter workflow
+  schedule:
+    - cron: '0 8 * * 1'  # Mondays at 08:00 UTC
   workflow_dispatch:
     inputs:
       output_tag:
