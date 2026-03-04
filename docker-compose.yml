@@ -1,0 +1,53 @@
+version: "3.9"
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: nba_props
+      POSTGRES_USER: nba_props
+      POSTGRES_PASSWORD: nba_props
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./sql/migrations:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nba_props"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql://nba_props:nba_props@db:5432/nba_props
+      SPORTRADAR_API_KEY: ${SPORTRADAR_API_KEY:-}
+      ODDS_API_KEY: ${ODDS_API_KEY:-}
+      API_HOST: "0.0.0.0"
+      API_PORT: "8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    command: >
+      uvicorn nba_props.api.app:create_app
+      --factory --host 0.0.0.0 --port 8000 --reload
+
+  worker:
+    build: .
+    environment:
+      DATABASE_URL: postgresql://nba_props:nba_props@db:5432/nba_props
+      SPORTRADAR_API_KEY: ${SPORTRADAR_API_KEY:-}
+      ODDS_API_KEY: ${ODDS_API_KEY:-}
+    depends_on:
+      db:
+        condition: service_healthy
+    command: >
+      python -m nba_props.jobs.run_pipeline
+    profiles:
+      - worker
+
+volumes:
+  pgdata:
