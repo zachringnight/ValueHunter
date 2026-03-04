@@ -19,6 +19,8 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, List, Optional
 
+_MIN_EXPOSURE = 1e-3
+
 import numpy as np
 from sklearn.metrics import mean_absolute_error, mean_squared_error
 
@@ -84,6 +86,23 @@ class ThreePAModel(BaseModel):
         self.feature_names: Optional[List[str]] = None
         self.feature_importances_: Optional[np.ndarray] = None
 
+    def _validate_inputs(self, X: np.ndarray, y: Optional[np.ndarray] = None) -> None:
+        """Validate core model inputs for numeric stability and shape consistency."""
+        if X.ndim != 2:
+            raise ValueError("X must be a 2D array")
+        if not np.all(np.isfinite(X)):
+            raise ValueError("X must contain only finite values")
+
+        if y is not None:
+            if y.ndim != 1:
+                raise ValueError("y must be a 1D array")
+            if y.shape[0] != X.shape[0]:
+                raise ValueError("y length must match number of rows in X")
+            if not np.all(np.isfinite(y)):
+                raise ValueError("y must contain only finite values")
+            if np.any(y < 0):
+                raise ValueError("y must contain non-negative counts")
+
     # ------------------------------------------------------------------ #
     # fit
     # ------------------------------------------------------------------ #
@@ -113,9 +132,10 @@ class ThreePAModel(BaseModel):
         """
         X = np.asarray(X, dtype=np.float64)
         y = np.asarray(y, dtype=np.float64)
+        self._validate_inputs(X, y)
 
         self.feature_names = feature_names
-        offset = self._prepare_offset(minutes_exposure)
+        offset = self._prepare_offset(minutes_exposure, n_samples=X.shape[0])
 
         if self.distribution == "negative_binomial":
             self._fit_negative_binomial(X, y, offset)
@@ -181,7 +201,8 @@ class ThreePAModel(BaseModel):
         """
         self._check_fitted()
         X = np.asarray(X, dtype=np.float64)
-        offset = self._prepare_offset(minutes_exposure)
+        self._validate_inputs(X)
+        offset = self._prepare_offset(minutes_exposure, n_samples=X.shape[0])
 
         if self.distribution in ("negative_binomial", "poisson"):
             return self._predict_glm(X, offset)
@@ -244,6 +265,7 @@ class ThreePAModel(BaseModel):
         self._check_fitted()
         X = np.asarray(X, dtype=np.float64)
         y = np.asarray(y, dtype=np.float64)
+        self._validate_inputs(X, y)
 
         preds = self.predict(X, minutes_exposure=minutes_exposure)
 
@@ -351,18 +373,20 @@ class ThreePAModel(BaseModel):
     ) -> None:
         """Fallback Poisson fit via sklearn."""
         # sklearn PoissonRegressor doesn't support offsets directly.
-        # We incorporate the offset by modifying the target: y_adj = y / exp(offset)
-        # then fit on the original X.
+        # We approximate an offset-aware fit by modeling a rate target:
+        #   y_rate = y / exposure, exposure = exp(offset)
+        # and weighting by exposure so higher-minute samples contribute more.
+        # Prediction then rescales rate back to counts.
         model = PoissonRegressor(alpha=0.01, max_iter=300)
         if offset is not None:
-            sample_weight = np.exp(offset)
-            model.fit(X, y, sample_weight=sample_weight)
+            exposure = np.exp(offset)
+            y_rate = y / exposure
+            model.fit(X, y_rate, sample_weight=exposure)
         else:
             model.fit(X, y)
         self._model = model
-        self._dispersion = self._estimate_negbin_dispersion(
-            y, model.predict(X)
-        )
+        train_mu = self._predict_sklearn_poisson(X, offset)
+        self._dispersion = self._estimate_negbin_dispersion(y, train_mu)
 
     def _fit_gbm_count(self, X: np.ndarray, y: np.ndarray) -> None:
         """Fit a GBM with Poisson / Tweedie loss for count prediction."""
@@ -415,16 +439,24 @@ class ThreePAModel(BaseModel):
         """Predict from statsmodels GLM or sklearn PoissonRegressor."""
         if self._fallback_sklearn:
             # sklearn PoissonRegressor
-            preds = self._model.predict(X)
-            if offset is not None:
-                preds = preds * np.exp(offset)
-            return preds
+            return self._predict_sklearn_poisson(X, offset)
         else:
             # statsmodels GLM result
             X_const = sm.add_constant(X)
             if offset is not None:
                 return self._model.predict(X_const, offset=offset)
             return self._model.predict(X_const)
+
+    def _predict_sklearn_poisson(
+        self,
+        X: np.ndarray,
+        offset: Optional[np.ndarray],
+    ) -> np.ndarray:
+        """Predict counts from sklearn Poisson model with optional offset rescaling."""
+        rate_or_count = self._model.predict(X)
+        if offset is None:
+            return np.maximum(rate_or_count, 0.0)
+        return np.maximum(rate_or_count * np.exp(offset), 0.0)
 
     def _predict_gbm(self, X: np.ndarray) -> np.ndarray:
         """Predict from GBM count model."""
@@ -438,13 +470,27 @@ class ThreePAModel(BaseModel):
     @staticmethod
     def _prepare_offset(
         minutes_exposure: Optional[np.ndarray],
+        n_samples: Optional[int] = None,
     ) -> Optional[np.ndarray]:
-        """Convert minutes exposure to a log-offset for GLM models."""
+        """Convert minutes exposure to a validated log-offset for GLM models."""
         if minutes_exposure is None:
             return None
+
         minutes_exposure = np.asarray(minutes_exposure, dtype=np.float64)
-        # Clamp to avoid log(0)
-        minutes_safe = np.clip(minutes_exposure, 1.0, None)
+        if minutes_exposure.ndim != 1:
+            raise ValueError("minutes_exposure must be a 1D array")
+        if n_samples is not None and minutes_exposure.shape[0] != n_samples:
+            raise ValueError(
+                "minutes_exposure length must match number of rows in X"
+            )
+        if not np.all(np.isfinite(minutes_exposure)):
+            raise ValueError("minutes_exposure must contain only finite values")
+        if np.any(minutes_exposure < 0):
+            raise ValueError("minutes_exposure cannot contain negative values")
+
+        # Use a tiny floor for zero-minute rows to preserve monotonic scaling
+        # while avoiding log(0) instability in offset-based GLMs.
+        minutes_safe = np.clip(minutes_exposure, _MIN_EXPOSURE, None)
         return np.log(minutes_safe)
 
     @staticmethod
@@ -452,20 +498,25 @@ class ThreePAModel(BaseModel):
         y: np.ndarray,
         mu: np.ndarray,
     ) -> float:
-        """Estimate NegBin dispersion alpha via method of moments.
+        """Estimate NegBin dispersion alpha using Pearson residual moments.
 
-        For NegBin: Var(Y) = mu + alpha * mu^2
-        Rearranging: alpha = (Var(Y) - mu_bar) / mu_bar^2
+        For NegBin: Var(Y_i) = mu_i + alpha * mu_i^2.
+        Solving per-row and averaging yields:
+            alpha_i ~= ((y_i - mu_i)^2 - mu_i) / mu_i^2
         """
         y = np.asarray(y, dtype=np.float64)
         mu = np.asarray(mu, dtype=np.float64)
-        residuals = y - mu
-        variance = float(np.var(residuals))
-        mu_mean = float(np.mean(mu))
-        if mu_mean <= 0:
+
+        if y.shape != mu.shape:
+            raise ValueError("y and mu must have the same shape")
+
+        mu_safe = np.clip(mu, 1e-8, None)
+        alpha_terms = ((y - mu_safe) ** 2 - mu_safe) / (mu_safe ** 2)
+        alpha = float(np.mean(alpha_terms))
+
+        if not np.isfinite(alpha):
             return 1.0
-        alpha = max((variance - mu_mean) / (mu_mean ** 2), 0.01)
-        return alpha
+        return max(alpha, 0.01)
 
     def _check_fitted(self) -> None:
         if not self.is_fitted:
