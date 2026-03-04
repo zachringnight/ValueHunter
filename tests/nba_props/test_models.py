@@ -94,6 +94,77 @@ class TestThreePAModel:
         assert "dispersion" in params
 
 
+
+    def test_poisson_rejects_negative_targets(self):
+        model = ThreePAModel(version="1.0", distribution="poisson")
+        X = np.zeros((5, 2))
+        y = np.array([1.0, 0.0, -0.5, 2.0, 1.0])
+        minutes = np.full(5, 30.0)
+
+        with pytest.raises(ValueError, match="non-negative"):
+            model.fit(X, y, minutes_exposure=minutes)
+
+    def test_predict_rejects_non_finite_features(self):
+        model = ThreePAModel(version="1.0", distribution="poisson")
+        X = np.zeros((20, 3))
+        y = np.ones(20)
+        minutes = np.full(20, 24.0)
+        model.fit(X, y, minutes_exposure=minutes)
+
+        X_bad = np.zeros((2, 3))
+        X_bad[0, 1] = np.nan
+        with pytest.raises(ValueError, match="finite"):
+            model.predict(X_bad, minutes_exposure=np.array([20.0, 20.0]))
+
+    def test_poisson_rejects_invalid_minutes_inputs(self):
+        model = ThreePAModel(version="1.0", distribution="poisson")
+        X = np.zeros((6, 3))
+        y = np.ones(6)
+
+        with pytest.raises(ValueError, match="negative"):
+            model.fit(X, y, minutes_exposure=np.array([30, 28, -1, 25, 26, 27]))
+
+        with pytest.raises(ValueError, match="length"):
+            model.fit(X, y, minutes_exposure=np.array([30, 28, 25]))
+
+    def test_poisson_handles_zero_minutes_without_nan(self):
+        model = ThreePAModel(version="1.0", distribution="poisson")
+        rng = np.random.default_rng(123)
+        X = rng.standard_normal((120, 3))
+        minutes = rng.uniform(0, 35, size=120)
+        y = rng.poisson(0.12 * minutes)
+
+        model.fit(X, y, minutes_exposure=minutes)
+        preds = model.predict(X[:20], minutes_exposure=np.zeros(20))
+
+        assert np.all(np.isfinite(preds))
+        assert np.all(preds >= 0)
+        assert np.max(preds) < 0.5
+
+    def test_poisson_minutes_exposure_scales_predictions(self):
+        model = ThreePAModel(version="1.0", distribution="poisson")
+        rng = np.random.default_rng(7)
+        X = rng.standard_normal((300, 4))
+        minutes = rng.uniform(12, 38, size=300)
+
+        # Constant per-minute shot rate with Poisson noise.
+        true_rate = 0.18
+        y = rng.poisson(true_rate * minutes)
+
+        model.fit(X, y, minutes_exposure=minutes)
+
+        X_eval = np.zeros((32, 4))
+        short_minutes = np.full(32, 18.0)
+        long_minutes = np.full(32, 36.0)
+
+        pred_short = model.predict(X_eval, minutes_exposure=short_minutes)
+        pred_long = model.predict(X_eval, minutes_exposure=long_minutes)
+
+        # Doubling minutes should approximately double predicted count.
+        ratio = np.mean(pred_long) / np.mean(pred_short)
+        assert ratio == pytest.approx(2.0, rel=0.25)
+
+
 class TestMakeRateModel:
     def test_init(self):
         model = MakeRateModel(version="1.0")

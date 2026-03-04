@@ -25,6 +25,8 @@ setup(
         "requests>=2.28.0",
         "numpy>=1.24.0",
         "scipy>=1.10.0",
+        "scikit-learn>=1.3.0",
+        "fastapi>=0.100.0",
     ],
     extras_require={
         "dev": [
