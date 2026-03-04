@@ -50,6 +50,5 @@ Thumbs.db
 data/out/*
 !data/out/.gitkeep
 
-# CFB data outputs (downloaded via workflow artifacts)
-/data/cfbd/
-*.parquet
+# Validation output
+validation_output/
