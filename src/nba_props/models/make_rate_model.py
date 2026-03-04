@@ -48,7 +48,10 @@ from sklearn.ensemble import GradientBoostingRegressor
 LEAGUE_3PT_PRIOR: float = 0.363
 CATCH_SHOOT_PRIOR: float = 0.374
 PULL_UP_PRIOR: float = 0.329
-PRIOR_WEIGHT: int = 100  # equivalent sample-size for the prior
+# Equivalent sample-size for the prior.
+# 50 pseudo-attempts balances shrinkage vs player signal for typical
+# NBA 3-point volumes (100-400 3PA per season).
+PRIOR_WEIGHT: int = 50
 
 
 _VALID_METHODS = {"beta_regression", "logit_gbm", "empirical_bayes_only"}

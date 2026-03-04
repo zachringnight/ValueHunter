@@ -50,5 +50,8 @@ Thumbs.db
 data/out/*
 !data/out/.gitkeep
 
-# Validation output
+# Validation output (regenerated on each run)
 validation_output/
+
+# Keep real data files (BBRef game logs, etc.)
+# data/bbref/ is tracked — do NOT ignore it

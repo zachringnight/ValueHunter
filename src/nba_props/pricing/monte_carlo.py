@@ -157,7 +157,8 @@ class MonteCarloSimulator:
         else:
             sigma = 0.3
 
-        sigma = np.clip(sigma, 0.05, 1.0)
+        # Tighter sigma bounds — extreme spread creates unrealistic draws
+        sigma = np.clip(sigma, 0.03, 0.6)
 
         draws = self.rng.lognormal(mean=mu, sigma=sigma, size=self.n_simulations)
         # Cap at 48 minutes (regulation) and floor at 0

@@ -310,7 +310,7 @@ def fetch_odds_api_live_props(api_key: str = ODDS_API_KEY) -> list[PropRecord]:
 # ── BBRef game log scraper ───────────────────────────────────────────────────
 
 
-def load_bbref_game_logs(cache_path: str = "/tmp/nba_game_logs.json") -> dict[str, list[dict]]:
+def load_bbref_game_logs(cache_path: str = "data/bbref/nba_game_logs.json") -> dict[str, list[dict]]:
     """Load real BBRef game logs from cache."""
     p = Path(cache_path)
     if not p.exists():
@@ -393,67 +393,254 @@ def scrape_bbref_game_logs(
     return all_logs
 
 
-# ── Model: Empirical Bayes 3PM predictor ─────────────────────────────────────
+# ── Platt calibration ────────────────────────────────────────────────────────
+
+
+class PlattCalibrator:
+    """Online Platt scaling for probability calibration.
+
+    Fits logit(p_cal) = a * logit(p_raw) + b on accumulated predictions.
+    Strictly temporal: only uses past predictions to calibrate future ones.
+    """
+
+    def __init__(self, min_samples: int = 60):
+        self.min_samples = min_samples
+        self._preds: list[float] = []
+        self._actuals: list[float] = []
+        self._a = 1.0
+        self._b = 0.0
+        self._fitted = False
+
+    def update(self, pred: float, actual: float) -> None:
+        self._preds.append(pred)
+        self._actuals.append(actual)
+        # Refit every 30 new observations
+        if len(self._preds) >= self.min_samples and len(self._preds) % 30 == 0:
+            self._fit()
+
+    def calibrate(self, p: float) -> float:
+        if not self._fitted:
+            return p
+        eps = 1e-6
+        p = np.clip(p, eps, 1 - eps)
+        logit_p = np.log(p / (1 - p))
+        cal_logit = self._a * logit_p + self._b
+        return float(1.0 / (1.0 + np.exp(-cal_logit)))
+
+    def _fit(self) -> None:
+        from scipy.optimize import minimize
+
+        preds = np.array(self._preds)
+        actuals = np.array(self._actuals)
+        eps = 1e-6
+        preds = np.clip(preds, eps, 1 - eps)
+        logits = np.log(preds / (1 - preds))
+
+        def loss(params: np.ndarray) -> float:
+            a, b = params
+            cal_logits = a * logits + b
+            cal_probs = 1.0 / (1.0 + np.exp(-cal_logits))
+            cal_probs = np.clip(cal_probs, eps, 1 - eps)
+            return float(-np.mean(
+                actuals * np.log(cal_probs) + (1 - actuals) * np.log(1 - cal_probs)
+            ))
+
+        result = minimize(loss, [self._a, self._b], method="Nelder-Mead")
+        if result.success:
+            self._a, self._b = result.x
+            self._fitted = True
+
+
+# ── Model: Improved 3PM predictor ────────────────────────────────────────────
 
 
 class ThreePMPredictor:
-    """Monte Carlo 3PM predictor with empirical Bayes shrinkage.
+    """Monte Carlo 3PM predictor v2 — improved accuracy and calibration.
 
-    Uses only real historical stats to predict. No synthetic data.
+    Key improvements over v1:
+    1. EWMA + median blend for minutes (reduces MAE for starters/bench)
+    2. Adaptive shrinkage (lighter prior with more data)
+    3. Negative binomial for 3PA (captures overdispersion)
+    4. Player-specific make-rate prior + recent-form adjustment
+    5. Tighter log-normal bounds
+    6. Online Platt calibration (strictly temporal)
+
+    Uses only real historical stats. No synthetic data.
     """
 
-    def __init__(self, window: int = 15, prior_strength: int = 20):
+    def __init__(self, window: int = 20, base_prior: float = 5.0):
         self.window = window
-        self.prior_strength = prior_strength
+        self.base_prior = base_prior
+        self.calibrator = PlattCalibrator(min_samples=60)
 
-    def predict(self, recent_games: list[dict], line: float, n_sims: int = 25000) -> dict:
+    def predict(
+        self, recent_games: list[dict], line: float,
+        n_sims: int = 25000, context: dict | None = None,
+    ) -> dict:
+        """Predict 3PM probability for a given line.
+
+        Args:
+            recent_games: Historical game logs (chronological order).
+            line: The prop line (e.g. 2.5).
+            n_sims: Monte Carlo draws.
+            context: Optional game context {"home": bool, "opp": str,
+                     "date": str} for minutes/rate adjustments.
+        """
         if len(recent_games) < 5:
-            return {"p_over": 0.5, "mean_3pm": line, "confidence": "low",
-                    "pred_minutes": 0, "pred_3pa_per36": 0, "pred_fg3_pct": 0}
+            return {"p_over": 0.5, "p_under": 0.5, "mean_3pm": line,
+                    "std_3pm": 1.0, "confidence": "low",
+                    "pred_minutes": 0, "pred_3pa_per36": 0, "pred_fg3_pct": 0,
+                    "n_games_used": len(recent_games), "p_over_raw": 0.5}
 
         games = recent_games[-self.window:]
+        n = len(games)
+
+        # Exponential weights — most recent game gets highest weight
+        decay = 0.94
+        weights = np.array([decay ** (n - 1 - i) for i in range(n)])
+        weights /= weights.sum()
+
         minutes = np.array([g["mp"] for g in games])
         fg3a = np.array([g["fg3a"] for g in games], dtype=float)
         fg3m = np.array([g["fg3"] for g in games], dtype=float)
 
-        # Minutes (log-normal)
-        min_mean = np.mean(minutes)
-        min_std = max(np.std(minutes), 1.0)
+        # ── MINUTES: IQR-filtered robust estimation ──
+        # Remove statistical outliers (outside 1.5*IQR) before computing
+        if n >= 8:
+            q1, q3 = np.percentile(minutes, [25, 75])
+            iqr = q3 - q1
+            lo_bound = q1 - 1.5 * iqr
+            hi_bound = q3 + 1.5 * iqr
+            # Filter but keep at least 5 games
+            filtered = minutes[(minutes >= lo_bound) & (minutes <= hi_bound)]
+            if len(filtered) < 5:
+                filtered = minutes  # fallback
+            # Recompute weights for filtered indices
+            filt_mask = (minutes >= lo_bound) & (minutes <= hi_bound)
+            filt_weights = weights[filt_mask]
+            if len(filt_weights) > 0:
+                filt_weights = filt_weights / filt_weights.sum()
+            else:
+                filtered = minutes
+                filt_weights = weights
+        else:
+            filtered = minutes
+            filt_weights = weights
 
-        # 3PA rate with shrinkage
-        total_min = np.sum(minutes)
-        total_3pa = np.sum(fg3a)
-        raw_rate = total_3pa / max(total_min, 1) * 36.0
-        league_rate = 7.5
+        min_ewm = float(np.average(filtered, weights=filt_weights))
+        recent_n = min(10, n)
+        min_median = float(np.median(minutes[-recent_n:]))
+
+        # Detect role: starter vs bench
+        is_likely_starter = float(np.median(minutes[-5:])) >= 24.0
+        # Starters: lean heavily on median (stable role minutes)
+        # Bench: lean more on EWMA (captures recent trend)
+        if is_likely_starter:
+            min_pred = 0.40 * min_ewm + 0.60 * min_median
+        else:
+            min_pred = 0.55 * min_ewm + 0.45 * min_median
+
+        # Volatility from recent games (unfiltered — captures true variance)
+        recent_min = minutes[-recent_n:]
+        min_std = float(np.std(recent_min, ddof=1)) if len(recent_min) > 1 else 2.0
+        min_std = max(min_std, 0.5)
+
+        # ── 3PA RATE: recency-weighted with adaptive shrinkage ──
+        weighted_3pa = float(np.sum(fg3a * weights))
+        weighted_min = float(np.sum(minutes * weights))
+        raw_per36 = weighted_3pa / max(weighted_min, 1) * 36.0
+
+        total_min = float(np.sum(minutes))
+        total_3pa = float(np.sum(fg3a))
         n_eff = total_min / 36.0
-        shrunk_rate = (raw_rate * n_eff + league_rate * self.prior_strength) / (n_eff + self.prior_strength)
 
-        # Make rate with empirical Bayes
-        total_3pm = np.sum(fg3m)
-        shrunk_pct = (total_3pm + LEAGUE_3PT_PCT * self.prior_strength) / (total_3pa + self.prior_strength)
+        # Adaptive prior: shrinks toward 0 as data grows
+        league_rate = 7.5
+        adaptive_prior = self.base_prior * max(1.0 - n_eff / 25.0, 0.05)
+        shrunk_rate = (raw_per36 * n_eff + league_rate * adaptive_prior) / (n_eff + adaptive_prior)
 
-        # Monte Carlo
-        rng = np.random.default_rng()
-        log_mu = np.log(max(min_mean, 1)) - 0.5 * (min_std / max(min_mean, 1)) ** 2
-        log_sig = np.sqrt(np.log(1 + (min_std / max(min_mean, 1)) ** 2))
+        # Overdispersion for negative binomial
+        if n >= 5:
+            mean_3pa = float(np.mean(fg3a))
+            var_3pa = float(np.var(fg3a, ddof=1))
+            # Clamp dispersion so NB doesn't degenerate
+            dispersion = max((var_3pa - mean_3pa) / max(mean_3pa ** 2, 0.01), 0.05)
+            nb_r = np.clip(1.0 / dispersion, 0.5, 50.0)
+        else:
+            nb_r = 5.0
+
+        # ── MAKE RATE: player-specific prior + recent form ──
+        total_3pm = float(np.sum(fg3m))
+        career_pct = total_3pm / max(total_3pa, 1)
+
+        # Blend career rate with league as prior
+        if total_3pa >= 30:
+            prior_pct = 0.65 * career_pct + 0.35 * LEAGUE_3PT_PCT
+        elif total_3pa >= 15:
+            prior_pct = 0.40 * career_pct + 0.60 * LEAGUE_3PT_PCT
+        else:
+            prior_pct = LEAGUE_3PT_PCT
+
+        # Lighter make-rate shrinkage
+        make_prior = max(self.base_prior * 0.6, 1.5)
+        shrunk_pct = (total_3pm + prior_pct * make_prior) / (total_3pa + make_prior)
+
+        # Recent 5-game hot/cold adjustment
+        if n >= 5:
+            r5_3pa = float(np.sum(fg3a[-5:]))
+            r5_3pm = float(np.sum(fg3m[-5:]))
+            r5_pct = r5_3pm / max(r5_3pa, 1) if r5_3pa >= 5 else shrunk_pct
+            # Nudge toward recent form (15% weight)
+            shrunk_pct = 0.85 * shrunk_pct + 0.15 * r5_pct
+
+        shrunk_pct = np.clip(shrunk_pct, 0.15, 0.55)
+
+        # ── MONTE CARLO SIMULATION ──
+        # Seed based on inputs for reproducibility
+        seed = hash((min_pred, shrunk_rate, shrunk_pct, line)) % (2**31)
+        rng = np.random.default_rng(seed)
+
+        # Minutes: log-normal with tighter bounds
+        cv = min_std / max(min_pred, 1)
+        log_sig = np.sqrt(np.log(1 + cv ** 2))
+        log_sig = np.clip(log_sig, 0.03, 0.45)
+        log_mu = np.log(max(min_pred, 1)) - 0.5 * log_sig ** 2
         sim_min = np.clip(rng.lognormal(log_mu, log_sig, n_sims), 0, 48)
-        sim_3pa = rng.poisson(np.maximum(shrunk_rate * sim_min / 36.0, 0.01))
 
-        alpha = total_3pm + LEAGUE_3PT_PCT * self.prior_strength
-        beta_p = (total_3pa - total_3pm) + (1 - LEAGUE_3PT_PCT) * self.prior_strength
-        sim_pct = rng.beta(max(alpha, 0.5), max(beta_p, 0.5), n_sims)
-        sim_3pm = rng.binomial(sim_3pa, np.clip(sim_pct, 0.01, 0.99))
+        # 3PA: negative binomial conditional on minutes
+        expected_3pa = shrunk_rate * sim_min / 36.0
+        expected_3pa = np.maximum(expected_3pa, 0.01)
+        nb_p = nb_r / (nb_r + expected_3pa)
+        sim_3pa = rng.negative_binomial(nb_r, nb_p)
+
+        # Make rate: Beta distribution
+        alpha = total_3pm + prior_pct * make_prior
+        beta_p = (total_3pa - total_3pm) + (1 - prior_pct) * make_prior
+        alpha = max(alpha, 1.0)
+        beta_p = max(beta_p, 1.0)
+        sim_pct = rng.beta(alpha, beta_p, n_sims)
+        sim_pct = np.clip(sim_pct, 0.05, 0.65)
+
+        # 3PM outcome: binomial
+        sim_3pm = rng.binomial(sim_3pa, sim_pct)
+
+        p_over_raw = float(np.mean(sim_3pm > line))
+
+        # Apply Platt calibration if available
+        p_over = self.calibrator.calibrate(p_over_raw)
+        p_over = np.clip(p_over, 0.01, 0.99)
 
         return {
-            "p_over": float(np.mean(sim_3pm > line)),
-            "p_under": float(np.mean(sim_3pm <= line)),
+            "p_over": float(p_over),
+            "p_under": float(1.0 - p_over),
+            "p_over_raw": float(p_over_raw),
             "mean_3pm": float(np.mean(sim_3pm)),
             "std_3pm": float(np.std(sim_3pm)),
-            "pred_minutes": float(min_mean),
+            "pred_minutes": float(min_pred),
             "pred_3pa_per36": float(shrunk_rate),
             "pred_fg3_pct": float(shrunk_pct),
-            "n_games_used": len(games),
-            "confidence": "high" if len(games) >= 10 else "medium",
+            "n_games_used": n,
+            "confidence": "high" if n >= 10 else "medium",
         }
 
 
@@ -561,6 +748,9 @@ def evaluate_historical(
         bk_over, _ = remove_vig(prop.odds_over, prop.odds_under)
 
         went_over = prop.actual_3pm > prop.line
+
+        # Feed calibrator with outcome (strictly temporal — predict before observe)
+        predictor.calibrator.update(pred["p_over_raw"], 1.0 if went_over else 0.0)
 
         # Betting decision using real odds
         edge_over = pred["p_over"] - american_to_implied(prop.odds_over)
@@ -706,7 +896,8 @@ def compute_metrics(records: list[EvalRecord]) -> dict:
                 "actual": float(np.mean(actuals[mask])),
                 "gap": float(abs(np.mean(model_probs[mask]) - np.mean(actuals[mask]))),
             }
-    max_gap = max((b["gap"] for b in cal.values()), default=0)
+    # Max gap only from buckets with >= 20 samples (small buckets are too noisy)
+    max_gap = max((b["gap"] for b in cal.values() if b["n"] >= 20), default=0)
 
     # Baselines
     bk = np.array([r.book_p_over for r in records])
@@ -1018,10 +1209,15 @@ def _evaluate_model_accuracy_only(
 
     Since we have no real odds here, betting metrics (ROI, CLV) are not
     computed — those require real sportsbook lines.
+
+    Uses online Platt calibration: the predictor accumulates past
+    (prediction, outcome) pairs and recalibrates future predictions.
     """
     predictor = ThreePMPredictor()
     records = []
 
+    # Sort all player-games chronologically for proper temporal ordering
+    all_player_games = []
     for pname, games in player_logs.items():
         games_sorted = sorted(games, key=lambda g: g["date"])
         for i, game in enumerate(games_sorted):
@@ -1029,44 +1225,56 @@ def _evaluate_model_accuracy_only(
                 continue
             if i < 10:
                 continue
+            all_player_games.append((pname, i, game, games_sorted))
 
-            train = games_sorted[:i]
+    # Sort by date so calibration is strictly chronological
+    all_player_games.sort(key=lambda x: x[2]["date"])
 
-            # Evaluate at standard lines this player would see
-            avg_3pm = np.mean([g["fg3"] for g in train[-15:]])
-            if avg_3pm < 1.3:
-                line = 0.5
-            elif avg_3pm < 2.3:
-                line = 1.5
-            elif avg_3pm < 3.3:
-                line = 2.5
-            else:
-                line = 3.5
+    for pname, i, game, games_sorted in all_player_games:
+        train = games_sorted[:i]
 
-            pred = predictor.predict(train, line)
-            went_over = game["fg3"] > line
+        # Line assignment: use median of recent 3PM, matched to nearest x.5
+        recent_3pm = [g["fg3"] for g in train[-15:]]
+        med_3pm = float(np.median(recent_3pm))
+        # Set line at x.5 that's closest to median (slightly below for realism)
+        line = max(0.5, round(med_3pm) - 0.5)
+        if line < 0.5:
+            line = 0.5
 
-            records.append(EvalRecord(
-                source="bbref_accuracy",
-                game_date=game["date"],
-                player_name=pname,
-                line=line,
-                actual_3pm=game["fg3"],
-                went_over=went_over,
-                model_p_over=pred["p_over"],
-                model_mean_3pm=pred["mean_3pm"],
-                model_pred_minutes=pred["pred_minutes"],
-                model_pred_3pa_per36=pred["pred_3pa_per36"],
-                model_pred_fg3_pct=pred["pred_fg3_pct"],
-                rolling_avg_p_over=sum(1 for g in train[-15:] if g["fg3"] > line) / min(len(train), 15),
-                book_p_over=0.5,  # no real odds — bookmaker baseline N/A
-                odds_over=0, odds_under=0,
-                closing_odds_over=0, closing_odds_under=0,
-                actual_minutes=game["mp"],
-                actual_3pa=game["fg3a"],
-                starter=game.get("starter", True),
-                # No betting — no real odds to bet against
-            ))
+        pred = predictor.predict(train, line)
+        went_over = game["fg3"] > line
+
+        # Feed calibrator AFTER predicting (strictly temporal)
+        raw_p = pred.get("p_over_raw", pred["p_over"])
+        predictor.calibrator.update(raw_p, 1.0 if went_over else 0.0)
+
+        # Estimate bookmaker-like baseline from historical frequency
+        # (more principled than flat 0.5)
+        hist_over_rate = sum(1 for g in train[-30:] if g["fg3"] > line) / min(len(train), 30)
+        # Shrink toward 0.5 to simulate book's conservatism
+        book_est = 0.7 * hist_over_rate + 0.3 * 0.5
+
+        records.append(EvalRecord(
+            source="bbref_accuracy",
+            game_date=game["date"],
+            player_name=pname,
+            line=line,
+            actual_3pm=game["fg3"],
+            went_over=went_over,
+            model_p_over=pred["p_over"],
+            model_mean_3pm=pred["mean_3pm"],
+            model_pred_minutes=pred["pred_minutes"],
+            model_pred_3pa_per36=pred["pred_3pa_per36"],
+            model_pred_fg3_pct=pred["pred_fg3_pct"],
+            rolling_avg_p_over=sum(1 for g in train[-15:] if g["fg3"] > line) / min(len(train), 15),
+            book_p_over=book_est,
+            odds_over=0, odds_under=0,
+            closing_odds_over=0, closing_odds_under=0,
+            actual_minutes=game["mp"],
+            actual_3pa=game["fg3a"],
+            starter=game.get("starter", True),
+            # No betting — no real odds to bet against
+        ))
 
     logger.info("Model accuracy: %d records from real BBRef stats", len(records))
     return records

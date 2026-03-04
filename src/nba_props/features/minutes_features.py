@@ -73,11 +73,22 @@ class MinutesFeatureBuilder:
         features["minutes_avg_l10"] = self._rolling_stat(minutes_vals, 10, "mean")
         features["minutes_avg_l20"] = self._rolling_stat(minutes_vals, 20, "mean")
 
+        # --- Robust minutes (IQR-filtered mean — resistant to blowouts) ---
+        features["minutes_robust_l10"] = self._rolling_stat(
+            minutes_vals, 10, "trimmed_mean"
+        )
+        features["minutes_median_l10"] = self._rolling_stat(
+            minutes_vals, 10, "median"
+        )
+
         # --- Minutes volatility (std of last 10) ---
         features["minutes_std_l10"] = self._rolling_stat(minutes_vals, 10, "std")
 
         # --- p90 minutes (90th percentile of last 20) ---
         features["minutes_p90_l20"] = self._rolling_stat(minutes_vals, 20, "p90")
+
+        # --- Minutes trend (slope over last 5 games) ---
+        features["minutes_trend_l5"] = self._compute_trend(minutes_vals, 5)
 
         # --- Starter indicators ---
         started_vals = [
@@ -146,7 +157,8 @@ class MinutesFeatureBuilder:
         window:
             Number of most-recent observations to include.
         stat:
-            One of ``"mean"``, ``"std"``, ``"p90"``.
+            One of ``"mean"``, ``"std"``, ``"p90"``, ``"median"``,
+            ``"trimmed_mean"``.
         """
         subset = values[:window]
         if not subset:
@@ -158,7 +170,29 @@ class MinutesFeatureBuilder:
             return statistics.pstdev(subset) if len(subset) >= 2 else 0.0
         if stat == "p90":
             return _percentile(subset, 90)
+        if stat == "median":
+            return statistics.median(subset)
+        if stat == "trimmed_mean":
+            return _trimmed_mean(subset, trim_pct=0.1)
         raise ValueError(f"Unknown stat type: {stat}")
+
+    @staticmethod
+    def _compute_trend(values: list[float], window: int) -> float:
+        """Compute linear trend (slope per game) over a window.
+
+        Positive slope = minutes increasing recently.
+        """
+        subset = values[:window]
+        if len(subset) < 3:
+            return 0.0
+        # Reverse so index 0 = oldest in window
+        subset_rev = list(reversed(subset))
+        n = len(subset_rev)
+        x_mean = (n - 1) / 2.0
+        y_mean = statistics.mean(subset_rev)
+        num = sum((i - x_mean) * (v - y_mean) for i, v in enumerate(subset_rev))
+        denom = sum((i - x_mean) ** 2 for i in range(n))
+        return num / denom if denom > 0 else 0.0
 
     # ------------------------------------------------------------------
     # Blowout probability
@@ -308,6 +342,19 @@ class MinutesFeatureBuilder:
 # -----------------------------------------------------------------------
 # Module-level helpers
 # -----------------------------------------------------------------------
+
+
+def _trimmed_mean(values: list[float], trim_pct: float = 0.1) -> float:
+    """Compute trimmed mean, removing the extreme trim_pct from each end."""
+    if not values:
+        return 0.0
+    s = sorted(values)
+    n = len(s)
+    trim_n = max(1, int(n * trim_pct))
+    if 2 * trim_n >= n:
+        return statistics.mean(s)
+    trimmed = s[trim_n : n - trim_n]
+    return statistics.mean(trimmed) if trimmed else statistics.mean(s)
 
 
 def _percentile(values: list[float], pct: int) -> float:
