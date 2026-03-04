@@ -472,6 +472,20 @@ class ThreePMPredictor:
         self.window = window
         self.base_prior = base_prior
         self.calibrator = PlattCalibrator(min_samples=60)
+        self._team_defense = self._load_team_defense()
+
+    @staticmethod
+    def _load_team_defense() -> dict:
+        """Load real team 3PT defense data from BBRef-derived stats."""
+        import os
+        path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))),
+            "data", "bbref", "team_defense_3pt.json",
+        )
+        if os.path.exists(path):
+            with open(path) as f:
+                return json.load(f)
+        return {}
 
     def predict(
         self, recent_games: list[dict], line: float,
@@ -559,6 +573,20 @@ class ThreePMPredictor:
         adaptive_prior = self.base_prior * max(1.0 - n_eff / 25.0, 0.05)
         shrunk_rate = (raw_per36 * n_eff + league_rate * adaptive_prior) / (n_eff + adaptive_prior)
 
+        # Opponent 3PA defense adjustment (real data)
+        if context and "opp" in context and self._team_defense:
+            opp = context["opp"]
+            if opp in self._team_defense:
+                opp_3pa = self._team_defense[opp]["avg_3pa_allowed"]
+                # League average 3PA allowed per player
+                league_avg_3pa = np.mean([
+                    d["avg_3pa_allowed"] for d in self._team_defense.values()
+                ])
+                # Adjustment factor: how much more/less 3PA this opponent allows
+                opp_factor = opp_3pa / max(league_avg_3pa, 1)
+                # Apply partial adjustment (30% weight — conservative)
+                shrunk_rate *= (1.0 + 0.30 * (opp_factor - 1.0))
+
         # Overdispersion for negative binomial
         if n >= 5:
             mean_3pa = float(np.mean(fg3a))
@@ -594,6 +622,19 @@ class ThreePMPredictor:
             shrunk_pct = 0.85 * shrunk_pct + 0.15 * r5_pct
 
         shrunk_pct = np.clip(shrunk_pct, 0.15, 0.55)
+
+        # Opponent 3P% defense adjustment (real data)
+        if context and "opp" in context and self._team_defense:
+            opp = context["opp"]
+            if opp in self._team_defense:
+                opp_fg3 = self._team_defense[opp]["avg_fg3_pct_allowed"]
+                league_avg_fg3 = np.mean([
+                    d["avg_fg3_pct_allowed"] for d in self._team_defense.values()
+                ])
+                fg3_factor = opp_fg3 / max(league_avg_fg3, 0.01)
+                # Apply partial adjustment (20% weight — conservative)
+                shrunk_pct *= (1.0 + 0.20 * (fg3_factor - 1.0))
+                shrunk_pct = np.clip(shrunk_pct, 0.15, 0.55)
 
         # ── MONTE CARLO SIMULATION ──
         # Seed based on inputs for reproducibility
@@ -1241,7 +1282,9 @@ def _evaluate_model_accuracy_only(
         if line < 0.5:
             line = 0.5
 
-        pred = predictor.predict(train, line)
+        # Pass opponent context for 3PA/3P% defense adjustment
+        game_ctx = {"opp": game.get("opp", "")}
+        pred = predictor.predict(train, line, context=game_ctx)
         went_over = game["fg3"] > line
 
         # Feed calibrator AFTER predicting (strictly temporal)
