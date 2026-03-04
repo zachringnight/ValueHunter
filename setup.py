@@ -1,15 +1,10 @@
 from setuptools import setup, find_packages
 
-with open("README.md", "r", encoding="utf-8") as fh:
-    long_description = fh.read()
-
 setup(
-    name="cfb-mismatch",
-    version="0.1.0",
+    name="nba-props",
+    version="1.1.0",
     author="Value Hunter",
-    description="CFB Mismatch Model - Integrate and analyze college football stats",
-    long_description=long_description,
-    long_description_content_type="text/markdown",
+    description="NBA 3PM Props Engine - pregame player props pricing system",
     url="https://github.com/zachringnight/ValueHunter",
     package_dir={"": "src"},
     packages=find_packages(where="src"),
@@ -29,15 +24,11 @@ setup(
         "pyyaml>=6.0",
         "requests>=2.28.0",
         "numpy>=1.24.0",
+        "scipy>=1.10.0",
     ],
     extras_require={
         "dev": [
             "pytest>=7.0",
-        ],
-    },
-    entry_points={
-        "console_scripts": [
-            "cfb-mismatch=cfb_mismatch.cli:main",
         ],
     },
 )
