@@ -1725,7 +1725,48 @@ def fetch_nba_player_shooting(
     return data
 
 
-# ── Model: Empirical Bayes 3PM predictor ─────────────────────────────────────
+# ── Shared minutes projection ─────────────────────────────────────────────────
+
+
+def _project_minutes(
+    minutes: "np.ndarray",
+    ctx: dict,
+) -> tuple[float, float]:
+    """Project minutes for an upcoming game.
+
+    Uses the player's own recent minutes with:
+    - Recency-weighted average (last 3 games get 2x weight)
+    - Blowout reduction for large spreads (>8 points)
+    - Game-total pace signal (high totals = tighter rotations kept in)
+    """
+    n = len(minutes)
+    if n == 0:
+        return 0.0, 1.0
+
+    # Recency-weighted mean: last 3 games get 2x weight
+    weights = np.ones(n)
+    weights[-min(3, n):] = 2.0
+    min_mean = float(np.average(minutes, weights=weights))
+    min_std = max(float(np.std(minutes)), 1.0)
+
+    # Blowout adjustment: big favorites/underdogs see bench minutes
+    spread = ctx.get("spread", 0.0)
+    if abs(spread) > 8 and min_mean > 20:
+        blowout_excess = abs(spread) - 8
+        minutes_adj = 1.0 - min(blowout_excess * 0.02, 0.12)
+        min_mean *= minutes_adj
+
+    # Game total signal: very high totals (fast pace) tend to keep
+    # starters in longer; very low totals can compress minutes
+    game_total = ctx.get("total", 0.0)
+    if game_total > 0:
+        total_adj = np.clip((game_total - 228.0) * 0.002, -0.03, 0.03)
+        min_mean *= (1.0 + total_adj)
+
+    return min_mean, min_std
+
+
+# ── Model: 3PM predictor ─────────────────────────────────────────────────────
 
 
 class ThreePMPredictor:
@@ -1763,27 +1804,13 @@ class ThreePMPredictor:
         fg3a = np.array([g["fg3a"] for g in games], dtype=float)
         fg3m = np.array([g["fg3"] for g in games], dtype=float)
 
-        # ── Minutes projection with blowout adjustment ───────────────
-        min_mean = float(np.mean(minutes))
-        min_std = max(float(np.std(minutes)), 1.0)
+        # ── Minutes projection ────────────────────────────────────
+        min_mean, min_std = _project_minutes(minutes, ctx)
 
-        spread = ctx.get("spread", 0.0)
-        if abs(spread) > 8 and min_mean > 20:
-            blowout_excess = abs(spread) - 8
-            minutes_adj = 1.0 - min(blowout_excess * 0.02, 0.12)
-            min_mean *= minutes_adj
-
-        # ── 3PA rate: base with shrinkage ────────────────────────────
+        # ── 3PA rate: player's own rate per 36 ────────────────────────
         total_min = np.sum(minutes)
         total_3pa = np.sum(fg3a)
-        raw_rate = total_3pa / max(total_min, 1) * 36.0
-        league_rate = 7.5
-        n_eff = total_min / 36.0
-        adaptive_prior = self.prior_strength * max(0.2, 1.0 - n_eff / 25.0)
-        shrunk_rate = (
-            (raw_rate * n_eff + league_rate * adaptive_prior)
-            / (n_eff + adaptive_prior)
-        )
+        shrunk_rate = total_3pa / max(total_min, 1) * 36.0
 
         # ── Scheme matchup: attempt rate adjustment ──────────────────
         # Instead of a single blanket ratio, weight the opponent's
@@ -1840,12 +1867,9 @@ class ThreePMPredictor:
                 pace_ratio = np.clip(game_total / 228.0, 0.90, 1.10)
                 shrunk_rate *= pace_ratio
 
-        # ── Make rate: zone-weighted opponent FG3% adjustment ────────
+        # ── Make rate: player's own FG3% ─────────────────────────────
         total_3pm = np.sum(fg3m)
-        shrunk_pct = (
-            (total_3pm + LEAGUE_3PT_PCT * self.prior_strength)
-            / (total_3pa + self.prior_strength)
-        )
+        shrunk_pct = total_3pm / max(total_3pa, 1)
 
         # Zone-weighted FG3% adjustment: weight opponent's corner vs ATB
         # defense by how this player distributes their shots
@@ -1952,8 +1976,8 @@ class ThreePMPredictor:
         sim_min = np.clip(rng.lognormal(log_mu, log_sig, n_sims), 0, 48)
         sim_3pa = rng.poisson(np.maximum(shrunk_rate * sim_min / 36.0, 0.01))
 
-        alpha = total_3pm + LEAGUE_3PT_PCT * self.prior_strength
-        beta_p = (total_3pa - total_3pm) + (1 - LEAGUE_3PT_PCT) * self.prior_strength
+        alpha = max(total_3pm, 0.5)
+        beta_p = max(total_3pa - total_3pm, 0.5)
         sim_pct = rng.beta(max(alpha, 0.5), max(beta_p, 0.5), n_sims)
         sim_3pm = rng.binomial(sim_3pa, np.clip(sim_pct, 0.01, 0.99))
 
@@ -2011,23 +2035,13 @@ class AssistsPredictor:
         minutes = np.array([g["mp"] for g in games])
         assists = np.array([g["ast"] for g in games], dtype=float)
 
-        # ── Minutes projection with blowout adjustment ───────────────
-        min_mean = float(np.mean(minutes))
-        min_std = max(float(np.std(minutes)), 1.0)
+        # ── Minutes projection ────────────────────────────────────
+        min_mean, min_std = _project_minutes(minutes, ctx)
 
-        spread = ctx.get("spread", 0.0)
-        if abs(spread) > 8 and min_mean > 20:
-            blowout_excess = abs(spread) - 8
-            minutes_adj = 1.0 - min(blowout_excess * 0.02, 0.12)
-            min_mean *= minutes_adj
-
-        # ── Assists rate per 36 with shrinkage ───────────────────────
+        # ── Assists rate per 36: player's own rate ──────────────────
         total_min = np.sum(minutes)
         total_ast = np.sum(assists)
-        raw_rate = total_ast / max(total_min, 1) * 36.0
-        n_eff = total_min / 36.0
-        adaptive_prior = self.prior_strength * max(0.2, 1.0 - n_eff / 25.0)
-        shrunk_rate = (raw_rate * n_eff + LEAGUE_AST_PER_36 * adaptive_prior) / (n_eff + adaptive_prior)
+        shrunk_rate = total_ast / max(total_min, 1) * 36.0
 
         # Opponent assists-allowed adjustment
         opp_ast = ctx.get("opp_ast_per_game", 0.0)
@@ -2172,7 +2186,6 @@ class BoxScorePredictor:
         self.window = window
         self.prior_strength = prior_strength
         self.bbref_field = BBREF_STAT_FIELD_ALL.get(stat_type, stat_type)
-        self.league_rate = LEAGUE_AVG_PER_36.get(stat_type, 5.0)
 
     def predict(
         self,
@@ -2195,30 +2208,13 @@ class BoxScorePredictor:
             [g.get(self.bbref_field, 0) for g in games], dtype=float
         )
 
-        # ── Minutes projection with blowout adjustment ───────────────
-        min_mean = float(np.mean(minutes))
-        min_std = max(float(np.std(minutes)), 1.0)
+        # ── Minutes projection ────────────────────────────────────
+        min_mean, min_std = _project_minutes(minutes, ctx)
 
-        spread = ctx.get("spread", 0.0)
-        if abs(spread) > 8 and min_mean > 20:
-            blowout_excess = abs(spread) - 8
-            minutes_adj = 1.0 - min(blowout_excess * 0.02, 0.12)
-            min_mean *= minutes_adj
-
-        # ── Rate per 36 with adaptive shrinkage ──────────────────
-        # Prior fades as sample grows — stars with large samples
-        # keep their actual rates, while low-sample players get
-        # pulled toward the league average.
+        # ── Rate per 36: player's own rate ───────────────────────
         total_min = np.sum(minutes)
         total_stat = np.sum(stat_vals)
-        raw_rate = total_stat / max(total_min, 1) * 36.0
-        n_eff = total_min / 36.0
-        # Scale prior strength: full strength at n_eff=5, half at n_eff=15
-        adaptive_prior = self.prior_strength * max(0.2, 1.0 - n_eff / 25.0)
-        shrunk_rate = (
-            (raw_rate * n_eff + self.league_rate * adaptive_prior)
-            / (n_eff + adaptive_prior)
-        )
+        shrunk_rate = total_stat / max(total_min, 1) * 36.0
 
         # ── Opponent allowed adjustment (baseline for all stats) ──
         opp_key = self._opp_context_key()
