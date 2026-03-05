@@ -50,6 +50,44 @@ BBREF_HEADERS = {
 
 LEAGUE_3PT_PCT = 0.363
 LEAGUE_AST_PER_36 = 4.5  # League-average assists per 36 minutes
+LEAGUE_AVG_3PA_PER_GAME = 35.0  # League-average team 3PA per game (2024-25)
+LEAGUE_AVG_AST_PER_GAME = 26.0  # League-average team assists per game
+LEAGUE_AVG_PACE = 100.0  # Possessions per 48 minutes baseline
+
+# ── Odds API full team name → BBRef abbreviation ────────────────────────────
+
+_ODDS_API_TO_BBREF = {
+    "Atlanta Hawks": "ATL",
+    "Boston Celtics": "BOS",
+    "Brooklyn Nets": "BRK",
+    "Charlotte Hornets": "CHO",
+    "Chicago Bulls": "CHI",
+    "Cleveland Cavaliers": "CLE",
+    "Dallas Mavericks": "DAL",
+    "Denver Nuggets": "DEN",
+    "Detroit Pistons": "DET",
+    "Golden State Warriors": "GSW",
+    "Houston Rockets": "HOU",
+    "Indiana Pacers": "IND",
+    "Los Angeles Clippers": "LAC",
+    "Los Angeles Lakers": "LAL",
+    "Memphis Grizzlies": "MEM",
+    "Miami Heat": "MIA",
+    "Milwaukee Bucks": "MIL",
+    "Minnesota Timberwolves": "MIN",
+    "New Orleans Pelicans": "NOP",
+    "New York Knicks": "NYK",
+    "Oklahoma City Thunder": "OKC",
+    "Orlando Magic": "ORL",
+    "Philadelphia 76ers": "PHI",
+    "Phoenix Suns": "PHO",
+    "Portland Trail Blazers": "POR",
+    "Sacramento Kings": "SAC",
+    "San Antonio Spurs": "SAS",
+    "Toronto Raptors": "TOR",
+    "Utah Jazz": "UTA",
+    "Washington Wizards": "WAS",
+}
 
 # Stat type constants
 STAT_FG3M = "fg3m"
@@ -107,6 +145,8 @@ class PropRecord:
     books: dict = field(default_factory=dict)
     spread: float = 0.0
     total: float = 0.0
+    _home_abbr: str = ""  # BBRef abbr of home team for this game
+    _away_abbr: str = ""  # BBRef abbr of away team for this game
 
     @property
     def actual_3pm(self) -> int:
@@ -281,6 +321,40 @@ def extract_sgo_props(
 # ── The Odds API fetcher ─────────────────────────────────────────────────────
 
 
+def _fetch_game_spread_total(
+    event_id: str, api_key: str,
+) -> tuple[float, float]:
+    """Fetch spread (home) and total for a single game from Odds API."""
+    try:
+        resp = requests.get(
+            f"{ODDS_API_BASE}/sports/basketball_nba/events/{event_id}/odds",
+            params={
+                "apiKey": api_key, "regions": "us",
+                "markets": "spreads,totals", "oddsFormat": "american",
+            },
+            timeout=15,
+        )
+        if resp.status_code != 200:
+            return 0.0, 0.0
+        data = resp.json()
+        spread, total = 0.0, 0.0
+        for bk in data.get("bookmakers", [])[:1]:  # first book only
+            for mkt in bk.get("markets", []):
+                if mkt["key"] == "spreads":
+                    for o in mkt["outcomes"]:
+                        if o["name"] == data.get("home_team", ""):
+                            spread = float(o.get("point", 0))
+                            break
+                elif mkt["key"] == "totals":
+                    for o in mkt["outcomes"]:
+                        if o["name"] == "Over":
+                            total = float(o.get("point", 0))
+                            break
+        return spread, total
+    except Exception:
+        return 0.0, 0.0
+
+
 def fetch_odds_api_live_props(
     api_key: str = ODDS_API_KEY,
     stat_types: tuple[str, ...] = (STAT_FG3M,),
@@ -305,9 +379,14 @@ def fetch_odds_api_live_props(
     props = []
     for ev in events:
         eid = ev["id"]
-        home = ev["home_team"]
-        away = ev["away_team"]
+        home_full = ev["home_team"]
+        away_full = ev["away_team"]
+        home_abbr = _ODDS_API_TO_BBREF.get(home_full, "")
+        away_abbr = _ODDS_API_TO_BBREF.get(away_full, "")
         game_time = ev.get("commence_time", "")[:10]
+
+        # Fetch spread and total for game context
+        spread, total = _fetch_game_spread_total(eid, api_key)
 
         resp2 = requests.get(
             f"{ODDS_API_BASE}/sports/basketball_nba/events/{eid}/odds",
@@ -371,6 +450,10 @@ def fetch_odds_api_live_props(
                     actual_stat=-1,  # game hasn't happened
                     stat_type=stat_type,
                     books=data["books"],
+                    spread=spread,
+                    total=total,
+                    _home_abbr=home_abbr,
+                    _away_abbr=away_abbr,
                 ))
 
     for st in stat_types:
@@ -465,6 +548,94 @@ def scrape_bbref_game_logs(
     return all_logs
 
 
+# ── Opponent defensive context from game logs ────────────────────────────────
+
+
+def compute_opponent_stats(
+    player_logs: dict[str, list[dict]],
+) -> dict[str, dict]:
+    """Compute per-team defensive stats from all player game logs.
+
+    Aggregates 3PA, 3PM, assists, and minutes allowed per game-date by opponent,
+    then returns per-team averages. This tells us how many 3PA/3PM/AST each
+    team allows per game on average.
+
+    Returns dict keyed by BBRef team abbr:
+        {
+            "BOS": {
+                "opp_3pa_per_game": 37.2,
+                "opp_3pm_per_game": 13.1,
+                "opp_fg3_pct_allowed": 0.352,
+                "opp_ast_per_game": 25.3,
+                "games_sampled": 50,
+            },
+            ...
+        }
+    """
+    # Accumulate per (opponent, date) → totals
+    # Each (opp, date) represents one game that opponent played
+    game_totals: dict[tuple[str, str], dict] = {}
+
+    for _player, games in player_logs.items():
+        for g in games:
+            opp = g.get("opp", "")
+            date = g.get("date", "")
+            if not opp or not date:
+                continue
+            key = (opp, date)
+            if key not in game_totals:
+                game_totals[key] = {"fg3a": 0, "fg3m": 0, "ast": 0, "mp": 0.0}
+            game_totals[key]["fg3a"] += g.get("fg3a", 0)
+            game_totals[key]["fg3m"] += g.get("fg3", 0)
+            game_totals[key]["ast"] += g.get("ast", 0)
+            game_totals[key]["mp"] += g.get("mp", 0.0)
+
+    # Aggregate per opponent team
+    team_agg: dict[str, dict] = {}
+    for (opp, _date), totals in game_totals.items():
+        if opp not in team_agg:
+            team_agg[opp] = {"fg3a": 0, "fg3m": 0, "ast": 0, "games": 0}
+        team_agg[opp]["fg3a"] += totals["fg3a"]
+        team_agg[opp]["fg3m"] += totals["fg3m"]
+        team_agg[opp]["ast"] += totals["ast"]
+        team_agg[opp]["games"] += 1
+
+    # First pass: compute per-team averages
+    raw_result = {}
+    for team, agg in team_agg.items():
+        n = max(agg["games"], 1)
+        fg3a_pg = agg["fg3a"] / n
+        fg3m_pg = agg["fg3m"] / n
+        raw_result[team] = {
+            "opp_3pa_per_game": fg3a_pg,
+            "opp_3pm_per_game": fg3m_pg,
+            "opp_fg3_pct_allowed": fg3m_pg / max(fg3a_pg, 1),
+            "opp_ast_per_game": agg["ast"] / n,
+            "games_sampled": n,
+        }
+
+    # Compute cross-team averages from our (partial) data so that ratios
+    # are relative, not biased by having only a subset of players.
+    if raw_result:
+        all_3pa = [v["opp_3pa_per_game"] for v in raw_result.values()]
+        all_ast = [v["opp_ast_per_game"] for v in raw_result.values()]
+        avg_3pa = sum(all_3pa) / len(all_3pa)
+        avg_ast = sum(all_ast) / len(all_ast)
+    else:
+        avg_3pa, avg_ast = 1.0, 1.0
+
+    # Store the sample averages so callers can compute ratios correctly
+    result = {}
+    for team, stats in raw_result.items():
+        result[team] = {
+            **stats,
+            "sample_avg_3pa": avg_3pa,
+            "sample_avg_ast": avg_ast,
+        }
+
+    return result
+
+
 # ── Model: Empirical Bayes 3PM predictor ─────────────────────────────────────
 
 
@@ -478,33 +649,88 @@ class ThreePMPredictor:
         self.window = window
         self.prior_strength = prior_strength
 
-    def predict(self, recent_games: list[dict], line: float, n_sims: int = 25000) -> dict:
+    def predict(
+        self,
+        recent_games: list[dict],
+        line: float,
+        n_sims: int = 25000,
+        game_context: dict | None = None,
+    ) -> dict:
+        """Predict 3PM distribution with optional game-context adjustments.
+
+        game_context keys (all optional):
+            spread: float       — home spread (negative = favored)
+            total: float        — game total (O/U)
+            opp_3pa_per_game: float — opponent 3PA allowed per game
+            opp_fg3_pct_allowed: float — opponent 3PT% allowed
+            is_home: bool
+        """
         if len(recent_games) < 5:
             return {"p_over": 0.5, "mean_stat": line, "confidence": "low",
                     "pred_minutes": 0, "pred_rate_per36": 0, "pred_make_pct": 0}
 
+        ctx = game_context or {}
         games = recent_games[-self.window:]
         minutes = np.array([g["mp"] for g in games])
         fg3a = np.array([g["fg3a"] for g in games], dtype=float)
         fg3m = np.array([g["fg3"] for g in games], dtype=float)
 
-        # Minutes (log-normal)
-        min_mean = np.mean(minutes)
-        min_std = max(np.std(minutes), 1.0)
+        # ── Minutes projection with blowout adjustment ───────────────
+        min_mean = float(np.mean(minutes))
+        min_std = max(float(np.std(minutes)), 1.0)
 
-        # 3PA rate with shrinkage
+        spread = ctx.get("spread", 0.0)
+        # Large spreads (|spread| > 8) compress starter minutes due to
+        # garbage time.  Apply a mild haircut: ~2-4% per point beyond 8.
+        if abs(spread) > 8 and min_mean > 20:
+            blowout_excess = abs(spread) - 8
+            # Cap the adjustment at ~12% reduction (3 minutes off ~28)
+            minutes_adj = 1.0 - min(blowout_excess * 0.02, 0.12)
+            min_mean *= minutes_adj
+
+        # ── 3PA rate with opponent adjustment ────────────────────────
         total_min = np.sum(minutes)
         total_3pa = np.sum(fg3a)
         raw_rate = total_3pa / max(total_min, 1) * 36.0
         league_rate = 7.5
         n_eff = total_min / 36.0
-        shrunk_rate = (raw_rate * n_eff + league_rate * self.prior_strength) / (n_eff + self.prior_strength)
+        shrunk_rate = (
+            (raw_rate * n_eff + league_rate * self.prior_strength)
+            / (n_eff + self.prior_strength)
+        )
 
-        # Make rate with empirical Bayes
+        # Opponent 3PA adjustment: if the opponent allows more/fewer 3PA
+        # than sample average, scale the player's attempt rate proportionally.
+        opp_3pa = ctx.get("opp_3pa_per_game", 0.0)
+        sample_avg_3pa = ctx.get("sample_avg_3pa", 0.0)
+        if opp_3pa > 0 and sample_avg_3pa > 0:
+            opp_3pa_ratio = np.clip(opp_3pa / sample_avg_3pa, 0.85, 1.15)
+            shrunk_rate *= opp_3pa_ratio
+
+        # Game-total adjustment: higher totals → more possessions → more
+        # shot attempts.  Normalize against typical total (~228).
+        game_total = ctx.get("total", 0.0)
+        if game_total > 0:
+            pace_ratio = np.clip(game_total / 228.0, 0.90, 1.10)
+            shrunk_rate *= pace_ratio
+
+        # ── Make rate with opponent FG3% adjustment ──────────────────
         total_3pm = np.sum(fg3m)
-        shrunk_pct = (total_3pm + LEAGUE_3PT_PCT * self.prior_strength) / (total_3pa + self.prior_strength)
+        shrunk_pct = (
+            (total_3pm + LEAGUE_3PT_PCT * self.prior_strength)
+            / (total_3pa + self.prior_strength)
+        )
 
-        # Monte Carlo
+        # If opponent allows a different FG3% than league average, nudge
+        # the make rate.  Use 50% weight so we don't overfit to noisy
+        # defensive splits.
+        opp_fg3_pct = ctx.get("opp_fg3_pct_allowed", 0.0)
+        if opp_fg3_pct > 0:
+            fg3_diff = opp_fg3_pct - LEAGUE_3PT_PCT
+            shrunk_pct += fg3_diff * 0.5
+            shrunk_pct = np.clip(shrunk_pct, 0.15, 0.55)
+
+        # ── Monte Carlo ──────────────────────────────────────────────
         rng = np.random.default_rng()
         log_mu = np.log(max(min_mean, 1)) - 0.5 * (min_std / max(min_mean, 1)) ** 2
         log_sig = np.sqrt(np.log(1 + (min_std / max(min_mean, 1)) ** 2))
@@ -546,51 +772,80 @@ class AssistsPredictor:
         self.window = window
         self.prior_strength = prior_strength
 
-    def predict(self, recent_games: list[dict], line: float, n_sims: int = 25000) -> dict:
+    def predict(
+        self,
+        recent_games: list[dict],
+        line: float,
+        n_sims: int = 25000,
+        game_context: dict | None = None,
+    ) -> dict:
+        """Predict assists distribution with optional game-context adjustments.
+
+        game_context keys (all optional):
+            spread: float           — home spread
+            total: float            — game total (O/U)
+            opp_ast_per_game: float — opponent assists allowed per game
+            is_home: bool
+        """
         if len(recent_games) < 5:
             return {"p_over": 0.5, "mean_stat": line, "confidence": "low",
                     "pred_minutes": 0, "pred_rate_per36": 0, "pred_make_pct": 0}
 
+        ctx = game_context or {}
         games = recent_games[-self.window:]
         minutes = np.array([g["mp"] for g in games])
         assists = np.array([g["ast"] for g in games], dtype=float)
 
-        # Minutes (log-normal)
-        min_mean = np.mean(minutes)
-        min_std = max(np.std(minutes), 1.0)
+        # ── Minutes projection with blowout adjustment ───────────────
+        min_mean = float(np.mean(minutes))
+        min_std = max(float(np.std(minutes)), 1.0)
 
-        # Assists rate per 36 with shrinkage
+        spread = ctx.get("spread", 0.0)
+        if abs(spread) > 8 and min_mean > 20:
+            blowout_excess = abs(spread) - 8
+            minutes_adj = 1.0 - min(blowout_excess * 0.02, 0.12)
+            min_mean *= minutes_adj
+
+        # ── Assists rate per 36 with shrinkage ───────────────────────
         total_min = np.sum(minutes)
         total_ast = np.sum(assists)
         raw_rate = total_ast / max(total_min, 1) * 36.0
         n_eff = total_min / 36.0
         shrunk_rate = (raw_rate * n_eff + LEAGUE_AST_PER_36 * self.prior_strength) / (n_eff + self.prior_strength)
 
-        # Overdispersion: assists tend to be slightly overdispersed vs Poisson
-        # Estimate dispersion from the data
+        # Opponent assists-allowed adjustment
+        opp_ast = ctx.get("opp_ast_per_game", 0.0)
+        sample_avg_ast = ctx.get("sample_avg_ast", 0.0)
+        if opp_ast > 0 and sample_avg_ast > 0:
+            opp_ast_ratio = np.clip(opp_ast / sample_avg_ast, 0.85, 1.15)
+            shrunk_rate *= opp_ast_ratio
+
+        # Game-total / pace adjustment
+        game_total = ctx.get("total", 0.0)
+        if game_total > 0:
+            pace_ratio = np.clip(game_total / 228.0, 0.90, 1.10)
+            shrunk_rate *= pace_ratio
+
+        # ── Overdispersion estimate ──────────────────────────────────
         if len(games) >= 5 and np.mean(assists) > 0:
             var = np.var(assists)
             mean = np.mean(assists)
-            # Negative binomial dispersion: variance = mean + mean^2/r
-            # r = mean^2 / (var - mean) if var > mean, else use Poisson (large r)
             if var > mean:
                 dispersion = mean ** 2 / (var - mean)
                 dispersion = max(dispersion, 1.0)
             else:
-                dispersion = 50.0  # approximately Poisson
+                dispersion = 50.0
         else:
             dispersion = 10.0
 
-        # Monte Carlo
+        # ── Monte Carlo ──────────────────────────────────────────────
         rng = np.random.default_rng()
         log_mu = np.log(max(min_mean, 1)) - 0.5 * (min_std / max(min_mean, 1)) ** 2
         log_sig = np.sqrt(np.log(1 + (min_std / max(min_mean, 1)) ** 2))
         sim_min = np.clip(rng.lognormal(log_mu, log_sig, n_sims), 0, 48)
 
-        # Scale assists rate by minutes
         sim_rate = np.maximum(shrunk_rate * sim_min / 36.0, 0.01)
 
-        # Draw from Negative Binomial: n=dispersion, p=dispersion/(dispersion+mu)
         nb_n = dispersion
         nb_p = dispersion / (dispersion + sim_rate)
         nb_p = np.clip(nb_p, 0.001, 0.999)
@@ -816,18 +1071,40 @@ def evaluate_historical(
     return records
 
 
+def _resolve_player_team(
+    player_games: list[dict], home_abbr: str, away_abbr: str,
+) -> tuple[str, str, bool]:
+    """Determine player's team, opponent, and home status from game logs + event."""
+    if not player_games:
+        return "", "", False
+    # Use the most recent game log to identify the player's team
+    last_team = player_games[-1].get("team", "")
+    if last_team == home_abbr:
+        return home_abbr, away_abbr, True
+    elif last_team == away_abbr:
+        return away_abbr, home_abbr, False
+    # Fuzzy: team may have changed or abbreviation mismatch
+    return last_team, "", False
+
+
 def predict_live(
     props: list[PropRecord],
     player_logs: dict[str, list[dict]],
     min_ev_pct: float = 0.03,
 ) -> list[dict]:
-    """Generate predictions for live/upcoming props using real odds."""
+    """Generate predictions for live/upcoming props using real odds.
+
+    Now incorporates game context: spread, total, opponent defensive stats.
+    """
     predictors: dict[str, ThreePMPredictor | AssistsPredictor] = {}
     predictions = []
 
     log_index: dict[str, dict[str, dict]] = {}
     for pname, logs in player_logs.items():
         log_index[pname.lower()] = {g["date"]: g for g in logs}
+
+    # Compute opponent defensive averages from all game logs
+    opp_stats = compute_opponent_stats(player_logs)
 
     for prop in props:
         matched = _find_player_logs(prop.player_name, log_index)
@@ -838,12 +1115,30 @@ def predict_live(
         if len(all_games) < 5:
             continue
 
+        # Resolve player's team, opponent, and home status
+        player_team, opp_team, is_home = _resolve_player_team(
+            all_games, prop._home_abbr, prop._away_abbr,
+        )
+
+        # Build game context dict
+        opp_def = opp_stats.get(opp_team, {})
+        game_context = {
+            "spread": prop.spread if is_home else -prop.spread,
+            "total": prop.total,
+            "is_home": is_home,
+            "opp_3pa_per_game": opp_def.get("opp_3pa_per_game", 0.0),
+            "opp_fg3_pct_allowed": opp_def.get("opp_fg3_pct_allowed", 0.0),
+            "opp_ast_per_game": opp_def.get("opp_ast_per_game", 0.0),
+            "sample_avg_3pa": opp_def.get("sample_avg_3pa", 0.0),
+            "sample_avg_ast": opp_def.get("sample_avg_ast", 0.0),
+        }
+
         # Get the right predictor for this stat type
         if prop.stat_type not in predictors:
             predictors[prop.stat_type] = get_predictor(prop.stat_type)
         predictor = predictors[prop.stat_type]
 
-        pred = predictor.predict(all_games, prop.line)
+        pred = predictor.predict(all_games, prop.line, game_context=game_context)
         bk_over, _ = remove_vig(prop.odds_over, prop.odds_under)
 
         edge_over = pred["p_over"] - american_to_implied(prop.odds_over)
@@ -876,6 +1171,10 @@ def predict_live(
             "edge": edge,
             "confidence": pred["confidence"],
             "books": prop.books,
+            "team": player_team,
+            "opp": opp_team,
+            "is_home": is_home,
+            "game_context": game_context,
         })
 
     predictions.sort(key=lambda p: abs(p["edge"]), reverse=True)
