@@ -45,6 +45,9 @@ class IngestionJob:
             "opponent_shooting_rows": 0,
             "injury_snapshots": 0,
             "odds_snapshots": 0,
+            "zone_shooting_rows": 0,
+            "playtype_defense_rows": 0,
+            "closest_def_rows": 0,
             "errors": [],
         }
 
@@ -79,6 +82,31 @@ class IngestionJob:
         except Exception as e:
             logger.error("Opponent shooting ingestion failed: %s", e)
             results["errors"].append(f"opponent_shooting: {e}")
+
+        # Step 4b: Ingest opponent shooting by zone
+        try:
+            results["zone_shooting_rows"] = self._ingest_opponent_zone_shooting(
+                season
+            )
+        except Exception as e:
+            logger.error("Zone shooting ingestion failed: %s", e)
+            results["errors"].append(f"zone_shooting: {e}")
+
+        # Step 4c: Ingest play-type defense
+        try:
+            results["playtype_defense_rows"] = self._ingest_playtype_defense(
+                season
+            )
+        except Exception as e:
+            logger.error("Play-type defense ingestion failed: %s", e)
+            results["errors"].append(f"playtype_defense: {e}")
+
+        # Step 4d: Ingest closest-defender opponent shooting
+        try:
+            results["closest_def_rows"] = self._ingest_closest_defender(season)
+        except Exception as e:
+            logger.error("Closest-defender ingestion failed: %s", e)
+            results["errors"].append(f"closest_defender: {e}")
 
         # Step 5: Ingest injury reports
         try:
@@ -235,6 +263,107 @@ class IngestionJob:
             "assist_rate": raw.get("AST_PCT"),
             "turnovers": raw.get("TOV", 0) or 0,
             "personal_fouls": raw.get("PF", 0) or 0,
+        }
+
+    def _ingest_opponent_zone_shooting(self, season: str) -> int:
+        """Ingest opponent shooting broken down by zone."""
+        zone_data = self.nba_client.get_opponent_shooting_by_zone(
+            season, "Regular Season"
+        )
+        count = 0
+        for row in zone_data:
+            normalized = self._normalize_zone_shooting(row)
+            if normalized:
+                # Update existing opponent shooting record with zone data
+                try:
+                    self._update_zone_columns(normalized)
+                    count += 1
+                except Exception as e:
+                    logger.debug("Zone update failed for %s: %s", normalized.get("team_abbr"), e)
+        return count
+
+    def _ingest_playtype_defense(self, season: str) -> int:
+        """Ingest play-type defense stats."""
+        pt_data = self.nba_client.get_opponent_play_type_defense(
+            season, "Regular Season"
+        )
+        count = 0
+        for row in pt_data:
+            normalized = self._normalize_playtype_defense(row, season)
+            if normalized:
+                self.repo.upsert_team_playtype_defense(normalized)
+                count += 1
+        return count
+
+    def _ingest_closest_defender(self, season: str) -> int:
+        """Ingest opponent shooting by closest-defender distance."""
+        def_data = self.nba_client.get_opponent_shooting_closest_defender(
+            season, "Regular Season"
+        )
+        count = 0
+        for row in def_data:
+            logger.debug("Closest defender row: %s", row)
+            count += 1
+        return count
+
+    def _update_zone_columns(self, zone: dict) -> None:
+        """Update team_opponent_shooting with zone-level columns."""
+        sql = """
+            UPDATE team_opponent_shooting SET
+                opp_paint_fga = %(opp_paint_fga)s,
+                opp_paint_fg_pct = %(opp_paint_fg_pct)s,
+                opp_midrange_fga = %(opp_midrange_fga)s,
+                opp_midrange_fg_pct = %(opp_midrange_fg_pct)s,
+                opp_corner_3pa = %(opp_corner_3pa)s,
+                opp_corner_3p_pct = %(opp_corner_3p_pct)s,
+                opp_above_break_3pa = %(opp_above_break_3pa)s,
+                opp_above_break_3p_pct = %(opp_above_break_3p_pct)s
+            WHERE team_abbr = %(team_abbr)s
+        """
+        self.repo._execute(sql, zone)
+        self.repo.conn.commit()
+
+    @staticmethod
+    def _normalize_zone_shooting(raw: dict) -> dict | None:
+        """Normalize zone shooting data."""
+        team = raw.get("TEAM_ABBREVIATION", raw.get("team_abbr", ""))
+        if not team:
+            return None
+        return {
+            "team_abbr": team,
+            "opp_paint_fga": raw.get("Restricted Area_FGA", raw.get("In The Paint (Non-RA)_FGA", 0)),
+            "opp_paint_fg_pct": raw.get("Restricted Area_FG_PCT", raw.get("In The Paint (Non-RA)_FG_PCT", 0)),
+            "opp_midrange_fga": raw.get("Mid-Range_FGA", 0),
+            "opp_midrange_fg_pct": raw.get("Mid-Range_FG_PCT", 0),
+            "opp_corner_3pa": raw.get("Left Corner 3_FGA", 0) + raw.get("Right Corner 3_FGA", 0) if raw.get("Left Corner 3_FGA") else raw.get("Corner 3_FGA", 0),
+            "opp_corner_3p_pct": raw.get("Left Corner 3_FG_PCT", raw.get("Corner 3_FG_PCT", 0)),
+            "opp_above_break_3pa": raw.get("Above the Break 3_FGA", 0),
+            "opp_above_break_3p_pct": raw.get("Above the Break 3_FG_PCT", 0),
+        }
+
+    @staticmethod
+    def _normalize_playtype_defense(raw: dict, season: str) -> dict | None:
+        """Normalize play-type defense data."""
+        team = raw.get("TEAM_ABBREVIATION", raw.get("team_abbreviation", ""))
+        if not team:
+            return None
+        return {
+            "team_abbr": team,
+            "season": season,
+            "play_type": raw.get("PLAY_TYPE", ""),
+            "gp": raw.get("GP", 0),
+            "poss_pct": raw.get("POSS_PCT", 0),
+            "poss": raw.get("POSS", 0),
+            "pts": raw.get("PTS", 0),
+            "fga": raw.get("FGA", 0),
+            "fgm": raw.get("FGM", 0),
+            "fg_pct": raw.get("FG_PCT", 0),
+            "efg_pct": raw.get("EFG_PCT", 0),
+            "ft_freq": raw.get("FT_FREQ", 0),
+            "tov_freq": raw.get("TOV_FREQ", 0),
+            "score_freq": raw.get("SCORE_FREQ", 0),
+            "percentile": raw.get("PERCENTILE", 0),
+            "ppp": raw.get("PPP", 0),
         }
 
     @staticmethod

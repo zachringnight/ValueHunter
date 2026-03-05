@@ -80,6 +80,14 @@ class OpportunityFeatureBuilder:
             float(game_context.get("spread", 0))
         )
 
+        # Zone-level opponent shooting (from opponent_shooting records)
+        features.update(self._compute_zone_features(opponent_shooting))
+
+        # Play-type defense features (from game_context)
+        features.update(self._compute_playtype_features(
+            game_context.get("playtype_defense"), archetype
+        ))
+
         # Archetype interaction features
         features.update(self._archetype_interactions(archetype, features))
 
@@ -144,6 +152,18 @@ class OpportunityFeatureBuilder:
             totals["time_of_poss"], totals["minutes"]
         )
 
+        # --- Passing metrics ---
+        feats["passes_made_per_min"] = self._per_minute_stat(
+            totals["passes_made"], totals["minutes"]
+        )
+        feats["passes_received_per_min"] = self._per_minute_stat(
+            totals["passes_received"], totals["minutes"]
+        )
+        # Pass ratio: passes_made / passes_received indicates playmaking load
+        feats["pass_ratio"] = self._safe_ratio(
+            totals["passes_made"], totals["passes_received"]
+        )
+
         # --- Seconds / dribbles per touch ---
         spt_vals = [
             float(g.get("avg_seconds_per_touch", 0) or 0) for g in tracking_games
@@ -156,6 +176,15 @@ class OpportunityFeatureBuilder:
         )
         feats["avg_dribbles_per_touch"] = (
             statistics.mean(dpt_vals) if dpt_vals else 0.0
+        )
+
+        # --- Assist rate (usage-weighted playmaking indicator) ---
+        ast_pct_vals = [
+            float(g.get("assist_rate", 0) or g.get("ast_pct", 0) or 0)
+            for g in player_games[:10]
+        ]
+        feats["assist_rate_avg_l10"] = (
+            statistics.mean(ast_pct_vals) if ast_pct_vals else 0.0
         )
 
         # --- Pace ---
@@ -201,6 +230,15 @@ class OpportunityFeatureBuilder:
         feats["3pa_avg_l10"] = self._mean_window(fg3a_vals, 10)
         feats["3pa_avg_l20"] = self._mean_window(fg3a_vals, 20)
 
+        # --- Assist rate ---
+        ast_pct_vals = [
+            float(g.get("assist_rate", 0) or g.get("ast_pct", 0) or 0)
+            for g in player_games[:10]
+        ]
+        feats["assist_rate_avg_l10"] = (
+            statistics.mean(ast_pct_vals) if ast_pct_vals else 0.0
+        )
+
         # Pace (still available from game context)
         feats["team_pace"] = float(game_context.get("team_pace", 100.0))
         feats["opponent_pace"] = float(game_context.get("opponent_pace", 100.0))
@@ -229,6 +267,8 @@ class OpportunityFeatureBuilder:
             "opp_3pa_allowed": 0.0,
             "opp_3pm_allowed": 0.0,
             "opp_fg3_pct_allowed": 0.0,
+            "opp_fga_allowed": 0.0,
+            "opp_fg_pct_allowed": 0.0,
             "opp_dribble_env": 0.0,
             "opp_touch_env": 0.0,
             "opp_closest_def_env": 0.0,
@@ -244,6 +284,8 @@ class OpportunityFeatureBuilder:
             "opp_3pa_allowed": "opp_3pa_allowed",
             "opp_3pm_allowed": "opp_3pm_allowed",
             "opp_fg3_pct_allowed": "opp_fg3_pct_allowed",
+            "opp_fga_allowed": "opp_fga_allowed",
+            "opp_fg_pct_allowed": "opp_fg_pct_allowed",
             "opp_dribble_env": "opp_dribble_allowed",
             "opp_touch_env": "opp_touch_allowed",
             "opp_closest_def_env": "opp_closest_def_dist",
@@ -253,6 +295,120 @@ class OpportunityFeatureBuilder:
                 acc[out_key] += float(rec.get(src_key, 0) or 0)
 
         return {k: v / n for k, v in acc.items()}
+
+    # ------------------------------------------------------------------
+    # Zone-level opponent shooting features
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _compute_zone_features(
+        opponent_shooting: list[dict[str, Any]] | None,
+    ) -> dict[str, float]:
+        """Extract zone-level opponent shooting into features.
+
+        Zones: paint, mid-range, corner 3, above-the-break 3.
+        """
+        defaults = {
+            "opp_paint_fga": 0.0,
+            "opp_paint_fg_pct": 0.0,
+            "opp_midrange_fga": 0.0,
+            "opp_midrange_fg_pct": 0.0,
+            "opp_corner_3pa": 0.0,
+            "opp_corner_3p_pct": 0.0,
+            "opp_above_break_3pa": 0.0,
+            "opp_above_break_3p_pct": 0.0,
+        }
+        if not opponent_shooting:
+            return defaults
+
+        n = len(opponent_shooting)
+        acc = {k: 0.0 for k in defaults}
+        for rec in opponent_shooting:
+            for key in defaults:
+                acc[key] += float(rec.get(key, 0) or 0)
+
+        return {k: v / n for k, v in acc.items()}
+
+    # ------------------------------------------------------------------
+    # Play-type defense features
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _compute_playtype_features(
+        playtype_defense: list[dict[str, Any]] | None,
+        archetype: str,
+    ) -> dict[str, float]:
+        """Extract play-type defense features relevant to 3PA opportunity.
+
+        Key play types for three-point shooting:
+        - Spotup: spot-up defense (most 3PA come from spot-ups)
+        - PRBallHandler: PnR ball-handler (pull-up 3s)
+        - OffScreen: off-screen (movement shooters)
+        - Handoff: hand-off plays
+        - Transition: fast-break 3s
+        """
+        defaults = {
+            "opp_spotup_ppp": 0.0,
+            "opp_spotup_fg_pct": 0.0,
+            "opp_spotup_freq": 0.0,
+            "opp_pnr_handler_ppp": 0.0,
+            "opp_pnr_handler_fg_pct": 0.0,
+            "opp_offscreen_ppp": 0.0,
+            "opp_offscreen_fg_pct": 0.0,
+            "opp_handoff_ppp": 0.0,
+            "opp_handoff_fg_pct": 0.0,
+            "opp_transition_ppp": 0.0,
+            "opp_transition_fg_pct": 0.0,
+            "opp_isolation_ppp": 0.0,
+            "opp_isolation_fg_pct": 0.0,
+        }
+        if not playtype_defense:
+            return defaults
+
+        # Build lookup by play_type
+        by_type: dict[str, dict] = {}
+        for rec in playtype_defense:
+            pt = rec.get("play_type", "")
+            by_type[pt] = rec
+
+        field_map = {
+            "Spotup": ("opp_spotup", ["ppp", "fg_pct", "poss_pct"]),
+            "PRBallHandler": ("opp_pnr_handler", ["ppp", "fg_pct"]),
+            "OffScreen": ("opp_offscreen", ["ppp", "fg_pct"]),
+            "Handoff": ("opp_handoff", ["ppp", "fg_pct"]),
+            "Transition": ("opp_transition", ["ppp", "fg_pct"]),
+            "Isolation": ("opp_isolation", ["ppp", "fg_pct"]),
+        }
+
+        result = dict(defaults)
+        for pt_name, (prefix, fields) in field_map.items():
+            rec = by_type.get(pt_name, {})
+            for f in fields:
+                key = f"{prefix}_{f}"
+                if key in result:
+                    result[key] = float(rec.get(f, 0) or 0)
+
+        # Special: spotup frequency
+        spotup = by_type.get("Spotup", {})
+        result["opp_spotup_freq"] = float(spotup.get("poss_pct", 0) or 0)
+
+        # Archetype-specific play-type vulnerability
+        # Movement shooters care about off-screen and spot-up defense
+        # Pull-up guards care about PnR handler and isolation defense
+        archetype_pt_map = {
+            "movement_wing_shooter": ["opp_offscreen_ppp", "opp_spotup_ppp"],
+            "pull_up_guard": ["opp_pnr_handler_ppp", "opp_isolation_ppp"],
+            "stretch_big": ["opp_spotup_ppp", "opp_handoff_ppp"],
+            "stationary_spacer": ["opp_spotup_ppp"],
+            "bench_microwave": ["opp_spotup_ppp", "opp_transition_ppp"],
+        }
+
+        relevant_ppp = archetype_pt_map.get(archetype, ["opp_spotup_ppp"])
+        result["opp_archetype_vulnerability"] = sum(
+            result.get(k, 0) for k in relevant_ppp
+        ) / len(relevant_ppp)
+
+        return result
 
     # ------------------------------------------------------------------
     # Archetype interaction features
@@ -342,6 +498,8 @@ class OpportunityFeatureBuilder:
             "assisted_3pm",
             "touches",
             "time_of_poss",
+            "passes_made",
+            "passes_received",
             "minutes",
         ]
         totals: dict[str, float] = {k: 0.0 for k in keys}

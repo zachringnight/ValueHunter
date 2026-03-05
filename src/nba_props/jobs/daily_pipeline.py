@@ -137,6 +137,12 @@ class DailyPipeline:
         player_games = self.repo.get_player_games(player_id, limit=30)
         tracking_games = self.repo.get_player_tracking(player_id)
         opponent_shooting = self.repo.get_team_opponent_shooting(opponent_abbr)
+        try:
+            playtype_defense = self.repo.get_team_playtype_defense(
+                opponent_abbr, season=game.get("season")
+            )
+        except Exception:
+            playtype_defense = []
         injury_snapshot = self.repo.get_injury_snapshot_as_of(
             player_id, game_id, freeze_time
         )
@@ -159,6 +165,7 @@ class DailyPipeline:
             "team_total": game.get("closing_total", 220) / 2,
             "is_home": team_abbr == game["home_team_abbr"],
             "opponent_abbr": opponent_abbr,
+            "playtype_defense": playtype_defense,
         }
 
         # Build feature snapshot

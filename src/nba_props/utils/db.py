@@ -280,6 +280,62 @@ class Repository:
         self._execute(sql, row)
         self.conn.commit()
 
+    def upsert_team_playtype_defense(self, row: dict) -> None:
+        """Upsert a row into the ``team_playtype_defense`` table.
+
+        Natural key: ``(team_abbr, season, play_type)``.
+        """
+        sql = """
+            INSERT INTO team_playtype_defense (
+                team_abbr, season, play_type, gp, poss_pct, poss,
+                pts, fga, fgm, fg_pct, efg_pct, ft_freq,
+                tov_freq, score_freq, percentile, ppp
+            ) VALUES (
+                %(team_abbr)s, %(season)s, %(play_type)s, %(gp)s,
+                %(poss_pct)s, %(poss)s, %(pts)s, %(fga)s, %(fgm)s,
+                %(fg_pct)s, %(efg_pct)s, %(ft_freq)s, %(tov_freq)s,
+                %(score_freq)s, %(percentile)s, %(ppp)s
+            )
+            ON CONFLICT (team_abbr, season, play_type) DO UPDATE SET
+                gp          = EXCLUDED.gp,
+                poss_pct    = EXCLUDED.poss_pct,
+                poss        = EXCLUDED.poss,
+                pts         = EXCLUDED.pts,
+                fga         = EXCLUDED.fga,
+                fgm         = EXCLUDED.fgm,
+                fg_pct      = EXCLUDED.fg_pct,
+                efg_pct     = EXCLUDED.efg_pct,
+                ft_freq     = EXCLUDED.ft_freq,
+                tov_freq    = EXCLUDED.tov_freq,
+                score_freq  = EXCLUDED.score_freq,
+                percentile  = EXCLUDED.percentile,
+                ppp         = EXCLUDED.ppp,
+                updated_at  = NOW()
+        """
+        self._execute(sql, row)
+        self.conn.commit()
+
+    def get_team_playtype_defense(
+        self,
+        team_abbr: str,
+        season: Optional[str] = None,
+    ) -> list[dict]:
+        """Return play-type defense rows for *team_abbr*."""
+        if season:
+            sql = """
+                SELECT * FROM team_playtype_defense
+                WHERE team_abbr = %s AND season = %s
+                ORDER BY play_type
+            """
+            return self._fetchall(sql, (team_abbr, season))
+        else:
+            sql = """
+                SELECT * FROM team_playtype_defense
+                WHERE team_abbr = %s
+                ORDER BY season DESC, play_type
+            """
+            return self._fetchall(sql, (team_abbr,))
+
     # -- inserts (append-only tables) ----------------------------------------
 
     def insert_injury_snapshot(self, snapshot: dict) -> int:

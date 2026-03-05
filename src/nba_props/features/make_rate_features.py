@@ -105,6 +105,28 @@ class MakeRateFeatureBuilder:
             opponent_shooting
         )
 
+        # --- Opponent general defensive quality ---
+        opp_def = self._opp_general_defense(opponent_shooting)
+        features["opp_fga_allowed"] = opp_def["opp_fga_allowed"]
+        features["opp_fg_pct_allowed"] = opp_def["opp_fg_pct_allowed"]
+
+        # --- Assist rate (playmaking context for shot quality) ---
+        ast_pct_vals = [
+            float(g.get("assist_rate", 0) or g.get("ast_pct", 0) or 0)
+            for g in player_games[:10]
+        ]
+        features["assist_rate_avg_l10"] = (
+            statistics.mean(ast_pct_vals) if ast_pct_vals else 0.0
+        )
+
+        # --- Zone-level opponent shooting ---
+        features.update(self._opp_zone_context(opponent_shooting))
+
+        # --- Play-type defense context for shot quality ---
+        features.update(self._playtype_shot_quality(
+            game_context.get("playtype_defense"), archetype
+        ))
+
         # --- Game context ---
         features["is_home"] = 1.0 if game_context.get("is_home") else 0.0
         features["rest_days"] = float(game_context.get("rest_days", 1))
@@ -296,6 +318,102 @@ class MakeRateFeatureBuilder:
             for rec in opponent_shooting
         ]
         return statistics.mean(vals) if vals else 0.0
+
+    # ------------------------------------------------------------------
+    # Opponent zone-level context for make rate
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _opp_zone_context(
+        opponent_shooting: list[dict[str, Any]] | None,
+    ) -> dict[str, float]:
+        """Zone-level opponent shooting context affecting make rate.
+
+        Corner 3 defense and above-the-break 3 defense directly impact
+        expected make rates for different shot types.
+        """
+        defaults = {
+            "opp_corner_3p_pct_env": 0.0,
+            "opp_above_break_3p_pct_env": 0.0,
+            "opp_paint_fg_pct_env": 0.0,
+        }
+        if not opponent_shooting:
+            return defaults
+
+        n = len(opponent_shooting)
+        corner = sum(float(r.get("opp_corner_3p_pct", 0) or 0) for r in opponent_shooting)
+        above = sum(float(r.get("opp_above_break_3p_pct", 0) or 0) for r in opponent_shooting)
+        paint = sum(float(r.get("opp_paint_fg_pct", 0) or 0) for r in opponent_shooting)
+        return {
+            "opp_corner_3p_pct_env": corner / n,
+            "opp_above_break_3p_pct_env": above / n,
+            "opp_paint_fg_pct_env": paint / n,
+        }
+
+    # ------------------------------------------------------------------
+    # Play-type shot quality context
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _playtype_shot_quality(
+        playtype_defense: list[dict[str, Any]] | None,
+        archetype: str,
+    ) -> dict[str, float]:
+        """Play-type defense context that impacts expected make rate.
+
+        Weak spot-up defense -> higher expected make rate for spacers.
+        Weak PnR defense -> higher expected make rate for pull-up guards.
+        """
+        defaults = {
+            "opp_relevant_pt_fg_pct": 0.0,
+            "opp_relevant_pt_efg_pct": 0.0,
+            "opp_relevant_pt_ppp": 0.0,
+        }
+        if not playtype_defense:
+            return defaults
+
+        by_type = {rec.get("play_type", ""): rec for rec in playtype_defense}
+
+        # Map archetype to primary play type for shot quality
+        primary_pt_map = {
+            "movement_wing_shooter": "OffScreen",
+            "pull_up_guard": "PRBallHandler",
+            "stretch_big": "Spotup",
+            "stationary_spacer": "Spotup",
+            "bench_microwave": "Spotup",
+        }
+        primary_pt = primary_pt_map.get(archetype, "Spotup")
+        rec = by_type.get(primary_pt, {})
+
+        return {
+            "opp_relevant_pt_fg_pct": float(rec.get("fg_pct", 0) or 0),
+            "opp_relevant_pt_efg_pct": float(rec.get("efg_pct", 0) or 0),
+            "opp_relevant_pt_ppp": float(rec.get("ppp", 0) or 0),
+        }
+
+    # ------------------------------------------------------------------
+    # Opponent general defensive quality
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _opp_general_defense(
+        opponent_shooting: list[dict[str, Any]] | None,
+    ) -> dict[str, float]:
+        """Return average opponent FGA allowed and FG% allowed."""
+        defaults = {"opp_fga_allowed": 0.0, "opp_fg_pct_allowed": 0.0}
+        if not opponent_shooting:
+            return defaults
+        n = len(opponent_shooting)
+        fga_sum = sum(
+            float(rec.get("opp_fga_allowed", 0) or 0) for rec in opponent_shooting
+        )
+        fg_pct_sum = sum(
+            float(rec.get("opp_fg_pct_allowed", 0) or 0) for rec in opponent_shooting
+        )
+        return {
+            "opp_fga_allowed": fga_sum / n,
+            "opp_fg_pct_allowed": fg_pct_sum / n,
+        }
 
     # ------------------------------------------------------------------
     # Empirical-Bayes shrinkage

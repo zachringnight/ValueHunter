@@ -125,6 +125,18 @@ class MinutesFeatureBuilder:
         # --- Lineup continuity ---
         features["lineup_continuity"] = self._compute_lineup_continuity(player_games)
 
+        # --- Foul trouble signal ---
+        pf_vals = self._extract_float_series(player_games, "personal_fouls")
+        features["fouls_avg_l10"] = self._rolling_stat(pf_vals, 10, "mean")
+        # High-foul games (4+) in last 10 — indicates foul trouble risk
+        features["high_foul_games_l10"] = sum(
+            1.0 for v in pf_vals[:10] if v >= 4.0
+        )
+
+        # --- Turnover load ---
+        tov_vals = self._extract_float_series(player_games, "turnovers")
+        features["turnovers_avg_l10"] = self._rolling_stat(tov_vals, 10, "mean")
+
         return features
 
     # ------------------------------------------------------------------
