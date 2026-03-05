@@ -144,6 +144,18 @@ class OpportunityFeatureBuilder:
             totals["time_of_poss"], totals["minutes"]
         )
 
+        # --- Passing metrics ---
+        feats["passes_made_per_min"] = self._per_minute_stat(
+            totals["passes_made"], totals["minutes"]
+        )
+        feats["passes_received_per_min"] = self._per_minute_stat(
+            totals["passes_received"], totals["minutes"]
+        )
+        # Pass ratio: passes_made / passes_received indicates playmaking load
+        feats["pass_ratio"] = self._safe_ratio(
+            totals["passes_made"], totals["passes_received"]
+        )
+
         # --- Seconds / dribbles per touch ---
         spt_vals = [
             float(g.get("avg_seconds_per_touch", 0) or 0) for g in tracking_games
@@ -156,6 +168,15 @@ class OpportunityFeatureBuilder:
         )
         feats["avg_dribbles_per_touch"] = (
             statistics.mean(dpt_vals) if dpt_vals else 0.0
+        )
+
+        # --- Assist rate (usage-weighted playmaking indicator) ---
+        ast_pct_vals = [
+            float(g.get("assist_rate", 0) or g.get("ast_pct", 0) or 0)
+            for g in player_games[:10]
+        ]
+        feats["assist_rate_avg_l10"] = (
+            statistics.mean(ast_pct_vals) if ast_pct_vals else 0.0
         )
 
         # --- Pace ---
@@ -201,6 +222,15 @@ class OpportunityFeatureBuilder:
         feats["3pa_avg_l10"] = self._mean_window(fg3a_vals, 10)
         feats["3pa_avg_l20"] = self._mean_window(fg3a_vals, 20)
 
+        # --- Assist rate ---
+        ast_pct_vals = [
+            float(g.get("assist_rate", 0) or g.get("ast_pct", 0) or 0)
+            for g in player_games[:10]
+        ]
+        feats["assist_rate_avg_l10"] = (
+            statistics.mean(ast_pct_vals) if ast_pct_vals else 0.0
+        )
+
         # Pace (still available from game context)
         feats["team_pace"] = float(game_context.get("team_pace", 100.0))
         feats["opponent_pace"] = float(game_context.get("opponent_pace", 100.0))
@@ -229,6 +259,8 @@ class OpportunityFeatureBuilder:
             "opp_3pa_allowed": 0.0,
             "opp_3pm_allowed": 0.0,
             "opp_fg3_pct_allowed": 0.0,
+            "opp_fga_allowed": 0.0,
+            "opp_fg_pct_allowed": 0.0,
             "opp_dribble_env": 0.0,
             "opp_touch_env": 0.0,
             "opp_closest_def_env": 0.0,
@@ -244,6 +276,8 @@ class OpportunityFeatureBuilder:
             "opp_3pa_allowed": "opp_3pa_allowed",
             "opp_3pm_allowed": "opp_3pm_allowed",
             "opp_fg3_pct_allowed": "opp_fg3_pct_allowed",
+            "opp_fga_allowed": "opp_fga_allowed",
+            "opp_fg_pct_allowed": "opp_fg_pct_allowed",
             "opp_dribble_env": "opp_dribble_allowed",
             "opp_touch_env": "opp_touch_allowed",
             "opp_closest_def_env": "opp_closest_def_dist",
@@ -342,6 +376,8 @@ class OpportunityFeatureBuilder:
             "assisted_3pm",
             "touches",
             "time_of_poss",
+            "passes_made",
+            "passes_received",
             "minutes",
         ]
         totals: dict[str, float] = {k: 0.0 for k in keys}

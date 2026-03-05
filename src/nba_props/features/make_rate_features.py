@@ -105,6 +105,20 @@ class MakeRateFeatureBuilder:
             opponent_shooting
         )
 
+        # --- Opponent general defensive quality ---
+        opp_def = self._opp_general_defense(opponent_shooting)
+        features["opp_fga_allowed"] = opp_def["opp_fga_allowed"]
+        features["opp_fg_pct_allowed"] = opp_def["opp_fg_pct_allowed"]
+
+        # --- Assist rate (playmaking context for shot quality) ---
+        ast_pct_vals = [
+            float(g.get("assist_rate", 0) or g.get("ast_pct", 0) or 0)
+            for g in player_games[:10]
+        ]
+        features["assist_rate_avg_l10"] = (
+            statistics.mean(ast_pct_vals) if ast_pct_vals else 0.0
+        )
+
         # --- Game context ---
         features["is_home"] = 1.0 if game_context.get("is_home") else 0.0
         features["rest_days"] = float(game_context.get("rest_days", 1))
@@ -296,6 +310,30 @@ class MakeRateFeatureBuilder:
             for rec in opponent_shooting
         ]
         return statistics.mean(vals) if vals else 0.0
+
+    # ------------------------------------------------------------------
+    # Opponent general defensive quality
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _opp_general_defense(
+        opponent_shooting: list[dict[str, Any]] | None,
+    ) -> dict[str, float]:
+        """Return average opponent FGA allowed and FG% allowed."""
+        defaults = {"opp_fga_allowed": 0.0, "opp_fg_pct_allowed": 0.0}
+        if not opponent_shooting:
+            return defaults
+        n = len(opponent_shooting)
+        fga_sum = sum(
+            float(rec.get("opp_fga_allowed", 0) or 0) for rec in opponent_shooting
+        )
+        fg_pct_sum = sum(
+            float(rec.get("opp_fg_pct_allowed", 0) or 0) for rec in opponent_shooting
+        )
+        return {
+            "opp_fga_allowed": fga_sum / n,
+            "opp_fg_pct_allowed": fg_pct_sum / n,
+        }
 
     # ------------------------------------------------------------------
     # Empirical-Bayes shrinkage
