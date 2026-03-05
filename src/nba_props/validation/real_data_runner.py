@@ -937,6 +937,7 @@ def fetch_nba_player_shooting(
         from nba_api.stats.endpoints import (
             leaguedashplayershotlocations,
             leaguedashplayerptshot,
+            leaguedashptstats,
         )
         import time as _time
 
@@ -1063,6 +1064,138 @@ def fetch_nba_player_shooting(
             data[key]["tight_3pm"] = round(float(row["FG3M"]), 2)
             data[key]["tight_3pct"] = round(float(row["FG3_PCT"]), 4)
 
+        # 7. Catch-and-shoot tracking (dedicated endpoint — more detailed)
+        _time.sleep(0.6)
+        r_cs2 = leaguedashptstats.LeagueDashPtStats(
+            player_or_team="Player",
+            pt_measure_type="CatchShoot",
+            per_mode_simple="PerGame",
+            season=season,
+            season_type_all_star="Regular Season",
+        )
+        df_cs2 = r_cs2.get_data_frames()[0]
+        for _, row in df_cs2.iterrows():
+            key = row["PLAYER_NAME"].lower()
+            data.setdefault(key, {"name": row["PLAYER_NAME"]})
+            data[key]["cs_fgm"] = round(float(row.get("CATCH_SHOOT_FGM", 0)), 2)
+            data[key]["cs_fga"] = round(float(row.get("CATCH_SHOOT_FGA", 0)), 2)
+            cs_pct = row.get("CATCH_SHOOT_FG_PCT", 0)
+            data[key]["cs_fg_pct"] = round(float(cs_pct if cs_pct and cs_pct == cs_pct else 0), 4)
+            data[key]["cs_fg3m"] = round(float(row.get("CATCH_SHOOT_FG3M", 0)), 2)
+            data[key]["cs_fg3a"] = round(float(row.get("CATCH_SHOOT_FG3A", 0)), 2)
+            cs3_pct = row.get("CATCH_SHOOT_FG3_PCT", 0)
+            data[key]["cs_fg3_pct"] = round(float(cs3_pct if cs3_pct and cs3_pct == cs3_pct else 0), 4)
+            data[key]["cs_pts"] = round(float(row.get("CATCH_SHOOT_PTS", 0)), 2)
+
+        # 8. Pull-up shooting tracking
+        _time.sleep(0.6)
+        r_pu2 = leaguedashptstats.LeagueDashPtStats(
+            player_or_team="Player",
+            pt_measure_type="PullUpShot",
+            per_mode_simple="PerGame",
+            season=season,
+            season_type_all_star="Regular Season",
+        )
+        df_pu2 = r_pu2.get_data_frames()[0]
+        for _, row in df_pu2.iterrows():
+            key = row["PLAYER_NAME"].lower()
+            data.setdefault(key, {"name": row["PLAYER_NAME"]})
+            data[key]["pullup_fgm"] = round(float(row.get("PULL_UP_FGM", 0)), 2)
+            data[key]["pullup_fga"] = round(float(row.get("PULL_UP_FGA", 0)), 2)
+            pu_pct = row.get("PULL_UP_FG_PCT", 0)
+            data[key]["pullup_fg_pct"] = round(float(pu_pct if pu_pct and pu_pct == pu_pct else 0), 4)
+            data[key]["pullup_fg3m"] = round(float(row.get("PULL_UP_FG3M", 0)), 2)
+            data[key]["pullup_fg3a"] = round(float(row.get("PULL_UP_FG3A", 0)), 2)
+            pu3_pct = row.get("PULL_UP_FG3_PCT", 0)
+            data[key]["pullup_fg3_pct"] = round(float(pu3_pct if pu3_pct and pu3_pct == pu3_pct else 0), 4)
+            data[key]["pullup_pts"] = round(float(row.get("PULL_UP_PTS", 0)), 2)
+
+        # 9. Passing tracking
+        _time.sleep(0.6)
+        r_pass = leaguedashptstats.LeagueDashPtStats(
+            player_or_team="Player",
+            pt_measure_type="Passing",
+            per_mode_simple="PerGame",
+            season=season,
+            season_type_all_star="Regular Season",
+        )
+        df_pass = r_pass.get_data_frames()[0]
+        for _, row in df_pass.iterrows():
+            key = row["PLAYER_NAME"].lower()
+            data.setdefault(key, {"name": row["PLAYER_NAME"]})
+            data[key]["passes_made"] = round(float(row.get("PASSES_MADE", 0)), 1)
+            data[key]["passes_received"] = round(float(row.get("PASSES_RECEIVED", 0)), 1)
+            data[key]["potential_ast"] = round(float(row.get("POTENTIAL_AST", 0)), 2)
+            data[key]["ast_points_created"] = round(float(row.get("AST_POINTS_CREATED", 0)), 1)
+            data[key]["secondary_ast"] = round(float(row.get("SECONDARY_AST", 0)), 2)
+            data[key]["ft_ast"] = round(float(row.get("FT_AST", 0)), 2)
+            pct = row.get("AST_TO_PASS_PCT", 0)
+            data[key]["ast_to_pass_pct"] = round(float(pct if pct and pct == pct else 0), 4)
+            adj = row.get("AST_TO_PASS_PCT_ADJ", 0)
+            data[key]["ast_to_pass_pct_adj"] = round(float(adj if adj and adj == adj else 0), 4)
+
+        # 10. Possessions / touches tracking
+        _time.sleep(0.6)
+        r_poss = leaguedashptstats.LeagueDashPtStats(
+            player_or_team="Player",
+            pt_measure_type="Possessions",
+            per_mode_simple="PerGame",
+            season=season,
+            season_type_all_star="Regular Season",
+        )
+        df_poss = r_poss.get_data_frames()[0]
+        for _, row in df_poss.iterrows():
+            key = row["PLAYER_NAME"].lower()
+            data.setdefault(key, {"name": row["PLAYER_NAME"]})
+            data[key]["touches"] = round(float(row.get("TOUCHES", 0)), 1)
+            data[key]["front_ct_touches"] = round(float(row.get("FRONT_CT_TOUCHES", 0)), 1)
+            data[key]["time_of_poss"] = round(float(row.get("TIME_OF_POSS", 0)), 2)
+            data[key]["avg_sec_per_touch"] = round(float(row.get("AVG_SEC_PER_TOUCH", 0)), 2)
+            data[key]["avg_drib_per_touch"] = round(float(row.get("AVG_DRIB_PER_TOUCH", 0)), 2)
+            data[key]["elbow_touches"] = round(float(row.get("ELBOW_TOUCHES", 0)), 1)
+            data[key]["post_touches"] = round(float(row.get("POST_TOUCHES", 0)), 1)
+            data[key]["paint_touches"] = round(float(row.get("PAINT_TOUCHES", 0)), 1)
+
+        # 11. Drives tracking
+        _time.sleep(0.6)
+        r_drv = leaguedashptstats.LeagueDashPtStats(
+            player_or_team="Player",
+            pt_measure_type="Drives",
+            per_mode_simple="PerGame",
+            season=season,
+            season_type_all_star="Regular Season",
+        )
+        df_drv = r_drv.get_data_frames()[0]
+        for _, row in df_drv.iterrows():
+            key = row["PLAYER_NAME"].lower()
+            data.setdefault(key, {"name": row["PLAYER_NAME"]})
+            data[key]["drives"] = round(float(row.get("DRIVES", 0)), 1)
+            data[key]["drive_fgm"] = round(float(row.get("DRIVE_FGM", 0)), 2)
+            data[key]["drive_fga"] = round(float(row.get("DRIVE_FGA", 0)), 2)
+            data[key]["drive_pts"] = round(float(row.get("DRIVE_PTS", 0)), 1)
+            data[key]["drive_ast"] = round(float(row.get("DRIVE_AST", 0)), 2)
+            data[key]["drive_passes"] = round(float(row.get("DRIVE_PASSES", 0)), 1)
+            data[key]["drive_tov"] = round(float(row.get("DRIVE_TOV", 0)), 2)
+
+        # 12. Speed & distance tracking
+        _time.sleep(0.6)
+        r_spd = leaguedashptstats.LeagueDashPtStats(
+            player_or_team="Player",
+            pt_measure_type="SpeedDistance",
+            per_mode_simple="PerGame",
+            season=season,
+            season_type_all_star="Regular Season",
+        )
+        df_spd = r_spd.get_data_frames()[0]
+        for _, row in df_spd.iterrows():
+            key = row["PLAYER_NAME"].lower()
+            data.setdefault(key, {"name": row["PLAYER_NAME"]})
+            data[key]["dist_miles"] = round(float(row.get("DIST_MILES", 0)), 2)
+            data[key]["dist_miles_off"] = round(float(row.get("DIST_MILES_OFF", 0)), 2)
+            data[key]["dist_miles_def"] = round(float(row.get("DIST_MILES_DEF", 0)), 2)
+            data[key]["avg_speed"] = round(float(row.get("AVG_SPEED", 0)), 2)
+            data[key]["avg_speed_off"] = round(float(row.get("AVG_SPEED_OFF", 0)), 2)
+
     except Exception as exc:
         logger.warning("NBA API player shooting fetch failed: %s", exc)
         if cache_path.exists():
@@ -1082,6 +1215,9 @@ def fetch_nba_player_shooting(
             )
             p["wide_open_share"] = round(
                 p.get("wide_open_3pa", 0) / total, 3
+            )
+            p["pullup_share"] = round(
+                p.get("pullup_fg3a", 0) / total, 3
             )
 
     with open(cache_path, "w") as f:
