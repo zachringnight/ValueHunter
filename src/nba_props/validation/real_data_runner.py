@@ -26,6 +26,10 @@ from typing import Any
 import numpy as np
 import requests
 
+# Persistent cache directory — survives reboots unlike /tmp
+_CACHE_DIR = Path(__file__).resolve().parents[3] / "data" / "cache"
+_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -516,7 +520,7 @@ def fetch_odds_api_live_props(
 # ── BBRef game log scraper ───────────────────────────────────────────────────
 
 
-def load_bbref_game_logs(cache_path: str = "/tmp/nba_game_logs.json") -> dict[str, list[dict]]:
+def load_bbref_game_logs(cache_path: str = str(_CACHE_DIR / "nba_game_logs.json")) -> dict[str, list[dict]]:
     """Load real BBRef game logs from cache."""
     p = Path(cache_path)
     if not p.exists():
@@ -648,7 +652,7 @@ def fetch_nba_opponent_shooting(
             ...
         }
     """
-    cache_path = Path(f"/tmp/nba_opp_shooting_{season}.json")
+    cache_path = _CACHE_DIR / f"nba_opp_shooting_{season}.json"
 
     # Use cached data if fresh enough
     if cache_path.exists():
@@ -733,7 +737,7 @@ def fetch_nba_opponent_general(
 
     Returns dict keyed by BBRef team abbr with opp_ast_per_game and pace.
     """
-    cache_path = Path(f"/tmp/nba_opp_general_{season}.json")
+    cache_path = _CACHE_DIR / f"nba_opp_general_{season}.json"
 
     if cache_path.exists():
         mtime = datetime.fromtimestamp(cache_path.stat().st_mtime)
@@ -804,7 +808,7 @@ def fetch_nba_team_advanced(
     cache_ttl_hours: int = 12,
 ) -> dict[str, dict]:
     """Fetch team advanced stats (pace, def rating) from NBA.com."""
-    cache_path = Path(f"/tmp/nba_team_advanced_{season}.json")
+    cache_path = _CACHE_DIR / f"nba_team_advanced_{season}.json"
 
     if cache_path.exists():
         mtime = datetime.fromtimestamp(cache_path.stat().st_mtime)
@@ -860,7 +864,7 @@ def fetch_nba_opp_tracking_shooting(
     Returns per-team dict with wide-open (6+ft), open (4-6ft), tight (2-4ft),
     and catch-and-shoot 3PA/3PM allowed per game.
     """
-    cache_path = Path(f"/tmp/nba_opp_tracking_{season}.json")
+    cache_path = _CACHE_DIR / f"nba_opp_tracking_{season}.json"
 
     if cache_path.exists():
         mtime = datetime.fromtimestamp(cache_path.stat().st_mtime)
@@ -993,7 +997,7 @@ def fetch_nba_synergy_defense(
     P&R ball handler, off-screen, transition, handoff — with PPP, FG%,
     EFG%, possessions, and percentile.
     """
-    cache_path = Path(f"/tmp/nba_synergy_defense_{season}.json")
+    cache_path = _CACHE_DIR / f"nba_synergy_defense_{season}.json"
 
     if cache_path.exists():
         mtime = datetime.fromtimestamp(cache_path.stat().st_mtime)
@@ -1067,7 +1071,7 @@ def fetch_nba_synergy_player(
     isolation, P&R ball handler, off-screen, transition — with PPP, FG%,
     possessions share, and efficiency.
     """
-    cache_path = Path(f"/tmp/nba_synergy_player_{season}.json")
+    cache_path = _CACHE_DIR / f"nba_synergy_player_{season}.json"
 
     if cache_path.exists():
         mtime = datetime.fromtimestamp(cache_path.stat().st_mtime)
@@ -1135,7 +1139,7 @@ def fetch_nba_team_hustle(
     cache_ttl_hours: int = 12,
 ) -> dict[str, dict]:
     """Fetch team hustle stats (contested shots, deflections, etc.)."""
-    cache_path = Path(f"/tmp/nba_team_hustle_{season}.json")
+    cache_path = _CACHE_DIR / f"nba_team_hustle_{season}.json"
 
     if cache_path.exists():
         mtime = datetime.fromtimestamp(cache_path.stat().st_mtime)
@@ -1194,7 +1198,7 @@ def fetch_nba_opp_shot_clock(
     Returns how many 3PA and at what FG3% each team allows by shot clock:
     early (22-18), normal (18-15, 15-7), and late (7-4, 4-0).
     """
-    cache_path = Path(f"/tmp/nba_opp_shot_clock_{season}.json")
+    cache_path = _CACHE_DIR / f"nba_opp_shot_clock_{season}.json"
 
     if cache_path.exists():
         mtime = datetime.fromtimestamp(cache_path.stat().st_mtime)
@@ -1263,7 +1267,7 @@ def fetch_nba_player_shot_clock(
     Returns per-player 3PA and FG3% broken down by shot clock:
     early (22-18), normal (15-7), late (4-0).
     """
-    cache_path = Path(f"/tmp/nba_player_shot_clock_{season}.json")
+    cache_path = _CACHE_DIR / f"nba_player_shot_clock_{season}.json"
 
     if cache_path.exists():
         mtime = datetime.fromtimestamp(cache_path.stat().st_mtime)
@@ -1336,7 +1340,7 @@ def fetch_nba_player_advanced(
     Returns per-player: NET_RATING, USG_PCT, AST_PCT, OFF_RATING, DEF_RATING,
     TS_PCT, EFG_PCT, PACE, PIE — key context for usage and on-court impact.
     """
-    cache_path = Path(f"/tmp/nba_player_advanced_{season}.json")
+    cache_path = _CACHE_DIR / f"nba_player_advanced_{season}.json"
 
     if cache_path.exists():
         mtime = datetime.fromtimestamp(cache_path.stat().st_mtime)
@@ -1407,7 +1411,7 @@ def fetch_nba_player_shooting(
     - Catch-and-shoot vs pull-up splits
     - Wide-open vs contested splits
     """
-    cache_path = Path(f"/tmp/nba_player_shooting_{season}.json")
+    cache_path = _CACHE_DIR / f"nba_player_shooting_{season}.json"
 
     if cache_path.exists():
         mtime = datetime.fromtimestamp(cache_path.stat().st_mtime)
@@ -2121,11 +2125,35 @@ class AssistsPredictor:
 
 
 class BoxScorePredictor:
-    """Generic Monte Carlo predictor for any counting stat.
+    """Advanced Monte Carlo predictor for any counting stat.
 
-    Uses the same minutes projection + rate-based shrinkage pattern
-    as the 3PM and assists predictors but generalized for any stat.
+    Each stat category has its own scheme-matchup logic using opponent
+    defensive data, synergy play types, tracking stats, and hustle metrics
+    — paralleling the depth of ThreePMPredictor and AssistsPredictor.
+
+    Stat-specific adjustment layers:
+      POINTS:    Opp def rating, FG% allowed by zone, synergy scoring PPP,
+                 contested shot rate, usage-weighted matchup quality
+      REBOUNDS:  Opp OREB/DREB splits, opp FG% (misses = more DREBs),
+                 opp paint FGA (drives = more OREB chances), pace
+      STEALS:    Opp TOV rate, opp ball-handling quality (synergy TOV%),
+                 deflection environment, transition frequency
+      BLOCKS:    Opp paint FGA, opp FG% at rim, opp isolation/PnR drives,
+                 contested shot rate
+      TURNOVERS: Opp deflections, opp steal rate, synergy TOV% by play type,
+                 player usage rate interaction
+      FGM:       Opp FG% allowed, opp contested shot rate, zone matchup
+                 (paint vs mid vs 3), player TS%/EFG% context
+      FTM:       Opp personal fouls, opp FTA allowed, player usage (drives),
+                 synergy isolation/PnR frequency (foul-drawing play types)
     """
+
+    # League-average reference points for synergy play types
+    _LEAGUE_AVG_PPP = {
+        "spotup": 1.03, "isolation": 0.89, "prballhandler": 0.87,
+        "prrollman": 0.96, "offscreen": 1.01, "transition": 1.12,
+        "handoff": 0.95, "cut": 1.10,
+    }
 
     def __init__(
         self,
@@ -2146,7 +2174,7 @@ class BoxScorePredictor:
         n_sims: int = 25000,
         game_context: dict | None = None,
     ) -> dict:
-        """Predict stat distribution and return projection dict."""
+        """Predict stat distribution with full advanced-stats adjustments."""
         if len(recent_games) < 5:
             return {
                 "p_over": 0.5, "mean_stat": line, "confidence": "low",
@@ -2180,7 +2208,7 @@ class BoxScorePredictor:
             / (n_eff + self.prior_strength)
         )
 
-        # ── Opponent allowed adjustment ────────────────────────────
+        # ── Opponent allowed adjustment (baseline for all stats) ──
         opp_key = self._opp_context_key()
         opp_val = ctx.get(opp_key, 0.0)
         league_opp_avg = LEAGUE_AVG_OPP_ALLOWED.get(self.stat_type, 0.0)
@@ -2188,7 +2216,7 @@ class BoxScorePredictor:
             opp_ratio = np.clip(opp_val / league_opp_avg, 0.85, 1.15)
             shrunk_rate *= opp_ratio
 
-        # Pace adjustment
+        # ── Pace adjustment ──────────────────────────────────────
         team_pace = ctx.get("team_pace", 0.0)
         opp_pace = ctx.get("opp_pace", 0.0)
         if team_pace > 0 and opp_pace > 0:
@@ -2201,35 +2229,10 @@ class BoxScorePredictor:
                 pace_ratio = np.clip(game_total / 228.0, 0.90, 1.10)
                 shrunk_rate *= pace_ratio
 
-        # ── Defensive rating environment adjustment ──────────────
-        opp_def_rating = ctx.get("opp_def_rating", 0.0)
-        if opp_def_rating > 0 and self.stat_type in (
-            STAT_POINTS, STAT_FGM, STAT_FTM
-        ):
-            # Higher def rating = worse defense = more scoring
-            def_adj = np.clip(opp_def_rating / 112.0, 0.93, 1.07)
-            shrunk_rate *= def_adj
-
-        # ── Hustle stats adjustment (deflections affect TOV/STL) ─
-        if self.stat_type == STAT_TURNOVERS:
-            defl = ctx.get("opp_deflections", 0.0)
-            if defl > 0:
-                # More deflections = more forced turnovers
-                defl_adj = np.clip(defl / 15.0, 0.95, 1.05)
-                shrunk_rate *= defl_adj
-        elif self.stat_type == STAT_STEALS:
-            # Player's steal rate benefits from opponent's turnover tendency
-            opp_tov = ctx.get("opp_tov_per_game", 0.0)
-            if opp_tov > 0:
-                tov_adj = np.clip(opp_tov / 14.0, 0.93, 1.07)
-                shrunk_rate *= tov_adj
-
-        # ── Free throw environment (opp fouls drawn) ────────────
-        if self.stat_type == STAT_FTM:
-            opp_pf = ctx.get("opp_pf_per_game", 0.0)
-            if opp_pf > 0:
-                foul_adj = np.clip(opp_pf / 20.0, 0.93, 1.07)
-                shrunk_rate *= foul_adj
+        # ── Stat-specific advanced adjustments ───────────────────
+        shrunk_rate = self._apply_stat_adjustments(
+            shrunk_rate, ctx, games, stat_vals, minutes
+        )
 
         # ── Overdispersion ─────────────────────────────────────────
         if len(games) >= 5 and np.mean(stat_vals) > 0:
@@ -2269,6 +2272,407 @@ class BoxScorePredictor:
             "n_games_used": len(games),
             "confidence": "high" if len(games) >= 10 else "medium",
         }
+
+    # ── Stat-specific adjustment dispatch ─────────────────────────────
+
+    def _apply_stat_adjustments(
+        self, rate: float, ctx: dict, games: list, stat_vals, minutes,
+    ) -> float:
+        """Route to the right stat-specific adjustment method."""
+        dispatch = {
+            STAT_POINTS: self._adjust_points,
+            STAT_REBOUNDS: self._adjust_rebounds,
+            STAT_STEALS: self._adjust_steals,
+            STAT_BLOCKS: self._adjust_blocks,
+            STAT_TURNOVERS: self._adjust_turnovers,
+            STAT_FGM: self._adjust_fgm,
+            STAT_FTM: self._adjust_ftm,
+        }
+        fn = dispatch.get(self.stat_type)
+        if fn:
+            rate = fn(rate, ctx, games, stat_vals, minutes)
+        return rate
+
+    # ── POINTS ────────────────────────────────────────────────────────
+
+    def _adjust_points(
+        self, rate: float, ctx: dict, games: list, stat_vals, minutes,
+    ) -> float:
+        """Points adjustments: def rating, usage, synergy scoring, contests.
+
+        Logic:
+        - Opp defensive rating → overall scoring environment
+        - Player USG% × opp contested shot rate → shot difficulty
+        - Synergy play-type matchup → scoring efficiency by play type
+          weighted by player's offensive frequency
+        - Opp FG% allowed → field goal conversion environment
+        """
+        # Defensive rating: higher = worse defense = more scoring
+        opp_def_rating = ctx.get("opp_def_rating", 0.0)
+        if opp_def_rating > 0:
+            def_adj = np.clip(opp_def_rating / 112.0, 0.93, 1.07)
+            rate *= def_adj
+
+        # Contested shot pressure: more contests = lower FG% = fewer pts
+        opp_contested = ctx.get("opp_contested_shots", 0.0)
+        if opp_contested > 0:
+            contest_ratio = opp_contested / 50.0  # ~50 avg
+            contest_adj = np.clip(1.0 - (contest_ratio - 1.0) * 0.03, 0.95, 1.05)
+            rate *= contest_adj
+
+        # Synergy scoring matchup — weight by player's play-type freq
+        _PTS_PLAY_TYPE_WEIGHTS = {
+            "isolation": 0.25, "prballhandler": 0.25, "spotup": 0.20,
+            "transition": 0.15, "cut": 0.10, "prrollman": 0.05,
+        }
+        syn_adj = self._synergy_matchup_adj(ctx, _PTS_PLAY_TYPE_WEIGHTS)
+        if syn_adj != 0:
+            rate *= (1.0 + syn_adj)
+
+        # Usage-weighted: high-usage players are more matchup-sensitive
+        player_usg = ctx.get("player_usg_pct", 0.0)
+        if player_usg > 0.25:
+            # Above-average usage amplifies the matchup effects
+            usg_multiplier = np.clip(player_usg / 0.20, 1.0, 1.08)
+            rate *= usg_multiplier
+        elif player_usg > 0 and player_usg < 0.15:
+            # Low-usage players are less affected by matchup
+            rate *= 0.98
+
+        return rate
+
+    # ── REBOUNDS ───────────────────────────────────────────────────────
+
+    def _adjust_rebounds(
+        self, rate: float, ctx: dict, games: list, stat_vals, minutes,
+    ) -> float:
+        """Rebounds adjustments: OREB/DREB splits, opp FG%, paint FGA, pace.
+
+        Logic:
+        - Opp FG% allowed → more misses = more DREB opportunities
+        - Opp OREB allowed → how well opponent crashes glass (limits DREBs)
+        - Opp paint FGA → more drives = more long rebound chances
+        - Opp pace × game total → faster pace = more possessions = more boards
+        - Player's OREB vs DREB split × opponent's specific weakness
+        """
+        # Opponent FG% → misses create rebounds
+        opp_fg_pct = ctx.get("opp_fg_pct", 0.0)
+        if opp_fg_pct > 0:
+            # Lower FG% = more misses = more rebound opportunities
+            # League avg ~46.5%
+            miss_adj = np.clip((0.465 - opp_fg_pct) * 2.0 + 1.0, 0.95, 1.05)
+            rate *= miss_adj
+
+        # Opponent OREB rate — teams that crash the glass reduce your DREBs
+        opp_oreb = ctx.get("opp_oreb_per_game", 0.0)
+        if opp_oreb > 0:
+            # League avg ~10.5 OREBs/game — more opponent OREBs = fewer DREBs
+            oreb_adj = np.clip(1.0 - (opp_oreb / 10.5 - 1.0) * 0.04, 0.95, 1.05)
+            rate *= oreb_adj
+
+        # Player's rebound type split (from recent games)
+        total_orb = sum(g.get("orb", 0) for g in games)
+        total_drb = sum(g.get("drb", 0) for g in games)
+        total_reb = total_orb + total_drb
+        if total_reb > 0:
+            orb_share = total_orb / total_reb
+            # OREB-heavy rebounders are sensitive to paint/rim FGA
+            opp_paint_fga = ctx.get("opp_fga_per_game", 0.0)
+            if orb_share > 0.30 and opp_paint_fga > 0:
+                # More opponent FGA (especially paint) = more OREB chances
+                fga_adj = np.clip(opp_paint_fga / 85.0, 0.97, 1.03)
+                rate *= fga_adj
+
+        # Opponent PnR roll man defense — weak roll defense = more
+        # rim activity = more rebound opportunities for bigs
+        rollman_ppp = ctx.get("def_prrollman_ppp", 0.0)
+        if rollman_ppp > 0:
+            roll_adj = np.clip(rollman_ppp / 0.96, 0.97, 1.03)
+            rate *= roll_adj
+
+        return rate
+
+    # ── STEALS ────────────────────────────────────────────────────────
+
+    def _adjust_steals(
+        self, rate: float, ctx: dict, games: list, stat_vals, minutes,
+    ) -> float:
+        """Steals adjustments: opp TOV rate, synergy TOV%, deflections, transition.
+
+        Logic:
+        - Opp turnover rate → sloppy teams give up more steal opportunities
+        - Synergy play-type TOV% → specific play types opponent is turnover-prone in
+        - Opp pace → more possessions = more steal chances
+        - Player's steal profile × opponent's ball security by play type
+        - Transition frequency → fast breaks create loose-ball steal chances
+        """
+        # Opponent turnover tendency
+        opp_tov = ctx.get("opp_tov_per_game", 0.0)
+        if opp_tov > 0:
+            tov_adj = np.clip(opp_tov / 14.0, 0.93, 1.07)
+            rate *= tov_adj
+
+        # Deflections environment — more deflections from player's team
+        # means more loose-ball chances
+        opp_deflections = ctx.get("opp_deflections", 0.0)
+        if opp_deflections > 0:
+            defl_adj = np.clip(opp_deflections / 15.0, 0.97, 1.03)
+            rate *= defl_adj
+
+        # Opponent's ball-handling weakness by play type
+        # PnR ball handlers and iso players are most steal-prone
+        _STL_PLAY_TYPES = {
+            "prballhandler": 0.35, "isolation": 0.30,
+            "transition": 0.20, "handoff": 0.15,
+        }
+        for pt, weight in _STL_PLAY_TYPES.items():
+            opp_tov_pct = ctx.get(f"def_{pt}_tov_pct", 0.0)
+            if opp_tov_pct > 0:
+                # Higher TOV% on this play type = more steal chances
+                # League avg TOV% varies by play type but ~10-15%
+                tov_pct_adj = np.clip(opp_tov_pct / 0.12, 0.95, 1.05)
+                rate *= (1.0 + (tov_pct_adj - 1.0) * weight)
+
+        # Loose balls recovered → proxy for opponent's ball security
+        opp_loose = ctx.get("opp_loose_balls_recovered", 0.0)
+        if opp_loose > 0:
+            loose_adj = np.clip(opp_loose / 5.5, 0.97, 1.03)
+            rate *= loose_adj
+
+        return rate
+
+    # ── BLOCKS ────────────────────────────────────────────────────────
+
+    def _adjust_blocks(
+        self, rate: float, ctx: dict, games: list, stat_vals, minutes,
+    ) -> float:
+        """Blocks adjustments: opp paint FGA, rim contests, PnR/iso drives.
+
+        Logic:
+        - Opp FGA → more shots = more block chances (especially paint)
+        - Opp paint/rim FG% → opponents who attack the rim face more blocks
+        - Opp isolation/PnR ball handler frequency → these create rim attacks
+        - Contested shot rate → player on a team that contests more = more blocks
+        - Player's block rate × opponent's rim attack frequency
+        """
+        # More opponent FGA = more block chances
+        opp_fga = ctx.get("opp_fga_per_game", 0.0)
+        if opp_fga > 0:
+            fga_adj = np.clip(opp_fga / 85.0, 0.95, 1.05)
+            rate *= fga_adj
+
+        # Opponent rim attack frequency (isolation + PnR drives)
+        iso_poss = ctx.get("def_isolation_ppp", 0.0)
+        pnr_poss = ctx.get("def_prballhandler_ppp", 0.0)
+        if iso_poss > 0 and pnr_poss > 0:
+            # Weak rim protection on these play types = opponents attack more
+            # but that also means more block opportunities for shot blockers
+            rim_attack = (iso_poss + pnr_poss) / 2.0
+            rim_avg = (0.89 + 0.87) / 2.0
+            rim_adj = np.clip(rim_attack / rim_avg, 0.95, 1.05)
+            rate *= rim_adj
+
+        # Opponent 2-point contested shot profile
+        opp_contested_2pt = ctx.get("opp_contested_shots_2pt", 0.0)
+        if opp_contested_2pt > 0:
+            # More 2-point contests = more rim action = more blocks
+            c2_adj = np.clip(opp_contested_2pt / 30.0, 0.97, 1.03)
+            rate *= c2_adj
+
+        # Opponent paint FG% — low FG% at rim suggests they face more
+        # rim protection, but we want opponents that ATTACK the rim,
+        # so use cut PPP as proxy for rim attack volume
+        cut_ppp = ctx.get("def_cut_ppp", 0.0)
+        if cut_ppp > 0:
+            cut_adj = np.clip(cut_ppp / 1.10, 0.97, 1.03)
+            rate *= cut_adj
+
+        return rate
+
+    # ── TURNOVERS ─────────────────────────────────────────────────────
+
+    def _adjust_turnovers(
+        self, rate: float, ctx: dict, games: list, stat_vals, minutes,
+    ) -> float:
+        """Turnovers adjustments: opp deflections, steal rate, usage, synergy.
+
+        Logic:
+        - Opp deflections → disruptive defense forces more turnovers
+        - Opp steal rate → ball-hawking opponents create more live-ball TOs
+        - Player USG% interaction → high-usage players in tough matchups turn
+          it over more
+        - Synergy play-type TOV% → opponent forces TOs on specific plays
+        - Opp PnR defense quality → good PnR defense creates traps → TOs
+        """
+        # Opponent deflections → direct TO pressure
+        defl = ctx.get("opp_deflections", 0.0)
+        if defl > 0:
+            defl_adj = np.clip(defl / 15.0, 0.95, 1.05)
+            rate *= defl_adj
+
+        # Opponent steal rate
+        opp_stl = ctx.get("opp_stl_per_game", 0.0)
+        if opp_stl > 0:
+            stl_adj = np.clip(opp_stl / 8.0, 0.95, 1.05)
+            rate *= stl_adj
+
+        # Usage interaction — high-usage players are more affected
+        player_usg = ctx.get("player_usg_pct", 0.0)
+        if player_usg > 0.25:
+            # High-usage players have more chance to turn it over
+            usg_tov = np.clip(player_usg / 0.20, 1.0, 1.05)
+            rate *= usg_tov
+
+        # Synergy: opponent forces TOs on specific play types
+        _TOV_PLAY_TYPES = {
+            "prballhandler": 0.35, "isolation": 0.30,
+            "transition": 0.20, "handoff": 0.15,
+        }
+        for pt, weight in _TOV_PLAY_TYPES.items():
+            player_freq = ctx.get(f"player_{pt}_freq", 0.0)
+            if player_freq == 0:
+                player_freq = ctx.get(f"player_off_{pt}_freq", 0.0)
+            opp_tov_pct = ctx.get(f"def_{pt}_tov_pct", 0.0)
+            if player_freq > 0 and opp_tov_pct > 0:
+                # Cross player's play-type usage with opponent's TO-forcing rate
+                tov_signal = opp_tov_pct / 0.12  # ~12% avg
+                rate *= (1.0 + (tov_signal - 1.0) * weight * player_freq)
+
+        # Opponent PnR defense quality — good PnR defense creates traps
+        pnr_def_ppp = ctx.get("def_prballhandler_ppp", 0.0)
+        player_pnr_freq = ctx.get("player_pnr_freq", 0.0)
+        if pnr_def_ppp > 0 and player_pnr_freq > 0.15:
+            # Low PPP = good defense = more traps = more TOs for ball handlers
+            pnr_adj = np.clip(1.0 - (pnr_def_ppp / 0.87 - 1.0) * 0.04, 0.96, 1.04)
+            rate *= pnr_adj
+
+        return rate
+
+    # ── FGM ───────────────────────────────────────────────────────────
+
+    def _adjust_fgm(
+        self, rate: float, ctx: dict, games: list, stat_vals, minutes,
+    ) -> float:
+        """FGM adjustments: opp FG% allowed, zone matchup, contests, synergy.
+
+        Logic:
+        - Opp FG% allowed → overall shooting environment
+        - Opp def rating → offensive efficiency environment
+        - Opp contested shot rate → shot difficulty
+        - Player TS%/EFG% → high-efficiency shooters sustain FGM better
+        - Synergy matchup → play-type efficiency × opponent defense
+        """
+        # Defensive rating environment
+        opp_def_rating = ctx.get("opp_def_rating", 0.0)
+        if opp_def_rating > 0:
+            def_adj = np.clip(opp_def_rating / 112.0, 0.95, 1.05)
+            rate *= def_adj
+
+        # Opponent contested shot rate
+        opp_contested = ctx.get("opp_contested_shots", 0.0)
+        if opp_contested > 0:
+            contest_adj = np.clip(1.0 - (opp_contested / 50.0 - 1.0) * 0.03, 0.96, 1.04)
+            rate *= contest_adj
+
+        # Opponent FG% allowed directly
+        opp_fg_pct = ctx.get("opp_fg_pct", 0.0)
+        if opp_fg_pct > 0:
+            fg_env = np.clip(opp_fg_pct / 0.465, 0.96, 1.04)
+            rate *= fg_env
+
+        # Player efficiency context
+        player_ts = ctx.get("player_ts_pct", 0.0)
+        if player_ts > 0.60:
+            # Highly efficient scorers are more matchup-resistant
+            rate *= 1.02
+        elif player_ts > 0 and player_ts < 0.50:
+            rate *= 0.98
+
+        # Synergy scoring matchup
+        _FGM_PLAY_TYPES = {
+            "isolation": 0.25, "prballhandler": 0.25,
+            "spotup": 0.20, "cut": 0.15, "transition": 0.15,
+        }
+        syn_adj = self._synergy_matchup_adj(ctx, _FGM_PLAY_TYPES)
+        if syn_adj != 0:
+            rate *= (1.0 + syn_adj)
+
+        return rate
+
+    # ── FTM ───────────────────────────────────────────────────────────
+
+    def _adjust_ftm(
+        self, rate: float, ctx: dict, games: list, stat_vals, minutes,
+    ) -> float:
+        """FTM adjustments: opp PF rate, FTA allowed, isolation/PnR freq, drives.
+
+        Logic:
+        - Opp personal fouls per game → foul-prone teams send players to line
+        - Opp FTA allowed per game → how many FTs opponent gives up
+        - Player's iso/PnR frequency → drive-heavy players draw more fouls
+        - Player USG% → high-usage players get to the line more
+        - Synergy isolation defense → weak iso defense = more drives = more FTs
+        """
+        # Opponent personal fouls
+        opp_pf = ctx.get("opp_pf_per_game", 0.0)
+        if opp_pf > 0:
+            foul_adj = np.clip(opp_pf / 20.0, 0.93, 1.07)
+            rate *= foul_adj
+
+        # Opponent FTA allowed
+        opp_fta = ctx.get("opp_fta_per_game", 0.0)
+        if opp_fta > 0:
+            fta_adj = np.clip(opp_fta / 22.0, 0.95, 1.05)
+            rate *= fta_adj
+
+        # Player drive frequency (iso + PnR are foul-drawing play types)
+        player_iso_freq = ctx.get("player_iso_freq", 0.0)
+        player_pnr_freq = ctx.get("player_pnr_freq", 0.0)
+        drive_freq = player_iso_freq + player_pnr_freq
+        if drive_freq > 0.30:
+            # Drive-heavy players draw more fouls vs weak isolation defense
+            iso_def_ppp = ctx.get("def_isolation_ppp", 0.0)
+            if iso_def_ppp > 0:
+                # Higher PPP = weaker defense = more drives reaching the basket
+                drive_adj = np.clip(iso_def_ppp / 0.89, 0.97, 1.05)
+                rate *= drive_adj
+
+        # High-usage players get to the line more
+        player_usg = ctx.get("player_usg_pct", 0.0)
+        if player_usg > 0.25:
+            usg_ft_adj = np.clip(player_usg / 0.20, 1.0, 1.04)
+            rate *= usg_ft_adj
+
+        return rate
+
+    # ── Helpers ───────────────────────────────────────────────────────
+
+    def _synergy_matchup_adj(
+        self, ctx: dict, play_type_weights: dict,
+    ) -> float:
+        """Compute weighted synergy matchup adjustment across play types.
+
+        Crosses player's offensive play-type frequency with opponent's
+        defensive PPP for each play type. Returns a multiplier delta
+        (e.g., +0.03 means 3% boost).
+        """
+        adj_sum = 0.0
+        weight_sum = 0.0
+        for pt, pt_weight in play_type_weights.items():
+            player_freq = ctx.get(f"player_{pt}_freq", 0.0)
+            if player_freq == 0:
+                player_freq = ctx.get(f"player_off_{pt}_freq", 0.0)
+            opp_def_ppp = ctx.get(f"def_{pt}_ppp", 0.0)
+            avg_ppp = self._LEAGUE_AVG_PPP.get(pt, 1.0)
+            if player_freq > 0 and opp_def_ppp > 0:
+                ppp_ratio = opp_def_ppp / avg_ppp
+                w = pt_weight * player_freq
+                adj_sum += w * (ppp_ratio - 1.0)
+                weight_sum += w
+
+        if weight_sum > 0:
+            return float(np.clip(adj_sum / weight_sum, -0.05, 0.05))
+        return 0.0
 
     def _opp_context_key(self) -> str:
         """Return the game_context key for opponent allowed stat."""

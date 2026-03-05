@@ -107,7 +107,9 @@ def get_team_roster_slugs(team_abbr: str, season: int = 2026) -> dict[str, str]:
 
 
 def main():
-    cache_path = Path("/tmp/nba_game_logs.json")
+    cache_dir = Path(__file__).resolve().parent / "data" / "cache"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    cache_path = cache_dir / "nba_game_logs.json"
 
     # Step 1: Get tonight's teams
     logger.info("=" * 60)

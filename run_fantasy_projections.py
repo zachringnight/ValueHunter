@@ -431,7 +431,10 @@ def project_player(
 
 
 def main():
-    cache_path = Path("/tmp/nba_game_logs.json")
+    # Use persistent project cache directory for game logs
+    cache_dir = Path(__file__).resolve().parent / "data" / "cache"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    cache_path = cache_dir / "nba_game_logs.json"
 
     logger.info("=" * 60)
     logger.info("FANTASY BOX SCORE PROJECTIONS — %s", datetime.now().strftime("%Y-%m-%d"))
