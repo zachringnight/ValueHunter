@@ -92,7 +92,56 @@ _ODDS_API_TO_BBREF = {
 # Stat type constants
 STAT_FG3M = "fg3m"
 STAT_ASSISTS = "assists"
+STAT_POINTS = "points"
+STAT_REBOUNDS = "rebounds"
+STAT_STEALS = "steals"
+STAT_BLOCKS = "blocks"
+STAT_TURNOVERS = "turnovers"
+STAT_FTM = "ftm"
+STAT_FGM = "fgm"
 SUPPORTED_STATS = (STAT_FG3M, STAT_ASSISTS)
+
+# All stat types including fantasy-only (no odds required)
+ALL_FANTASY_STATS = (
+    STAT_FG3M, STAT_ASSISTS, STAT_POINTS, STAT_REBOUNDS,
+    STAT_STEALS, STAT_BLOCKS, STAT_TURNOVERS, STAT_FTM, STAT_FGM,
+)
+
+# BBRef field name for each stat type
+BBREF_STAT_FIELD_ALL = {
+    STAT_FG3M: "fg3",
+    STAT_ASSISTS: "ast",
+    STAT_POINTS: "pts",
+    STAT_REBOUNDS: "reb",
+    STAT_STEALS: "stl",
+    STAT_BLOCKS: "blk",
+    STAT_TURNOVERS: "tov",
+    STAT_FTM: "ft",
+    STAT_FGM: "fg",
+}
+
+# League averages per 36 for each stat (2024-25 reference)
+LEAGUE_AVG_PER_36 = {
+    STAT_FG3M: 2.8,
+    STAT_ASSISTS: 4.5,
+    STAT_POINTS: 19.0,
+    STAT_REBOUNDS: 7.5,
+    STAT_STEALS: 1.2,
+    STAT_BLOCKS: 0.8,
+    STAT_TURNOVERS: 2.2,
+    STAT_FTM: 3.0,
+    STAT_FGM: 7.0,
+}
+
+# League averages per game for opponent allowed
+LEAGUE_AVG_OPP_ALLOWED = {
+    STAT_POINTS: 112.0,
+    STAT_REBOUNDS: 43.0,
+    STAT_STEALS: 8.0,
+    STAT_BLOCKS: 5.0,
+    STAT_TURNOVERS: 14.0,
+    STAT_ASSISTS: 26.0,
+}
 
 # Mapping from stat type to SGO odds key prefix and market name suffix
 SGO_STAT_CONFIG = {
@@ -529,13 +578,21 @@ def scrape_bbref_game_logs(
                     "home": data.get("game_location", "@") != "@",
                     "starter": data.get("is_starter", "") == "*",
                     "mp": mp,
-                    "fg3": int(data.get("fg3", "0") or "0"),
-                    "fg3a": int(data.get("fg3a", "0") or "0"),
                     "fg": int(data.get("fg", "0") or "0"),
                     "fga": int(data.get("fga", "0") or "0"),
-                    "pts": int(data.get("pts", "0") or "0"),
+                    "fg3": int(data.get("fg3", "0") or "0"),
+                    "fg3a": int(data.get("fg3a", "0") or "0"),
+                    "ft": int(data.get("ft", "0") or "0"),
+                    "fta": int(data.get("fta", "0") or "0"),
+                    "orb": int(data.get("orb", "0") or "0"),
+                    "drb": int(data.get("drb", "0") or "0"),
                     "reb": int(data.get("trb", "0") or "0"),
                     "ast": int(data.get("ast", "0") or "0"),
+                    "stl": int(data.get("stl", "0") or "0"),
+                    "blk": int(data.get("blk", "0") or "0"),
+                    "tov": int(data.get("tov", "0") or "0"),
+                    "pf": int(data.get("pf", "0") or "0"),
+                    "pts": int(data.get("pts", "0") or "0"),
                     "plus_minus": float(data.get("plus_minus", "0") or "0"),
                     "result": data.get("game_result", ""),
                 })
@@ -2043,11 +2100,145 @@ class AssistsPredictor:
         }
 
 
-def get_predictor(stat_type: str) -> ThreePMPredictor | AssistsPredictor:
+class BoxScorePredictor:
+    """Generic Monte Carlo predictor for any counting stat.
+
+    Uses the same minutes projection + rate-based shrinkage pattern
+    as the 3PM and assists predictors but generalized for any stat.
+    """
+
+    def __init__(
+        self,
+        stat_type: str,
+        window: int = 15,
+        prior_strength: int = 20,
+    ):
+        self.stat_type = stat_type
+        self.window = window
+        self.prior_strength = prior_strength
+        self.bbref_field = BBREF_STAT_FIELD_ALL.get(stat_type, stat_type)
+        self.league_rate = LEAGUE_AVG_PER_36.get(stat_type, 5.0)
+
+    def predict(
+        self,
+        recent_games: list[dict],
+        line: float = 0.0,
+        n_sims: int = 25000,
+        game_context: dict | None = None,
+    ) -> dict:
+        """Predict stat distribution and return projection dict."""
+        if len(recent_games) < 5:
+            return {
+                "p_over": 0.5, "mean_stat": line, "confidence": "low",
+                "pred_minutes": 0, "pred_rate_per36": 0,
+            }
+
+        ctx = game_context or {}
+        games = recent_games[-self.window:]
+        minutes = np.array([g["mp"] for g in games])
+        stat_vals = np.array(
+            [g.get(self.bbref_field, 0) for g in games], dtype=float
+        )
+
+        # ── Minutes projection with blowout adjustment ───────────────
+        min_mean = float(np.mean(minutes))
+        min_std = max(float(np.std(minutes)), 1.0)
+
+        spread = ctx.get("spread", 0.0)
+        if abs(spread) > 8 and min_mean > 20:
+            blowout_excess = abs(spread) - 8
+            minutes_adj = 1.0 - min(blowout_excess * 0.02, 0.12)
+            min_mean *= minutes_adj
+
+        # ── Rate per 36 with shrinkage ─────────────────────────────
+        total_min = np.sum(minutes)
+        total_stat = np.sum(stat_vals)
+        raw_rate = total_stat / max(total_min, 1) * 36.0
+        n_eff = total_min / 36.0
+        shrunk_rate = (
+            (raw_rate * n_eff + self.league_rate * self.prior_strength)
+            / (n_eff + self.prior_strength)
+        )
+
+        # ── Opponent allowed adjustment ────────────────────────────
+        opp_key = self._opp_context_key()
+        opp_val = ctx.get(opp_key, 0.0)
+        league_opp_avg = LEAGUE_AVG_OPP_ALLOWED.get(self.stat_type, 0.0)
+        if opp_val > 0 and league_opp_avg > 0:
+            opp_ratio = np.clip(opp_val / league_opp_avg, 0.85, 1.15)
+            shrunk_rate *= opp_ratio
+
+        # Pace adjustment
+        team_pace = ctx.get("team_pace", 0.0)
+        opp_pace = ctx.get("opp_pace", 0.0)
+        if team_pace > 0 and opp_pace > 0:
+            expected_pace = (team_pace + opp_pace) / 2.0
+            pace_ratio = np.clip(expected_pace / 100.0, 0.90, 1.10)
+            shrunk_rate *= pace_ratio
+        else:
+            game_total = ctx.get("total", 0.0)
+            if game_total > 0:
+                pace_ratio = np.clip(game_total / 228.0, 0.90, 1.10)
+                shrunk_rate *= pace_ratio
+
+        # ── Overdispersion ─────────────────────────────────────────
+        if len(games) >= 5 and np.mean(stat_vals) > 0:
+            var = np.var(stat_vals)
+            mean = np.mean(stat_vals)
+            if var > mean:
+                dispersion = mean ** 2 / (var - mean)
+                dispersion = max(dispersion, 1.0)
+            else:
+                dispersion = 50.0
+        else:
+            dispersion = 10.0
+
+        # ── Monte Carlo ────────────────────────────────────────────
+        rng = np.random.default_rng()
+        log_mu = np.log(max(min_mean, 1)) - 0.5 * (min_std / max(min_mean, 1)) ** 2
+        log_sig = np.sqrt(np.log(1 + (min_std / max(min_mean, 1)) ** 2))
+        sim_min = np.clip(rng.lognormal(log_mu, log_sig, n_sims), 0, 48)
+
+        sim_rate = np.maximum(shrunk_rate * sim_min / 36.0, 0.01)
+        nb_n = dispersion
+        nb_p = dispersion / (dispersion + sim_rate)
+        nb_p = np.clip(nb_p, 0.001, 0.999)
+        sim_stat = rng.negative_binomial(
+            n=np.full(n_sims, nb_n), p=nb_p,
+        )
+
+        return {
+            "p_over": float(np.mean(sim_stat > line)) if line > 0 else 0.5,
+            "mean_stat": float(np.mean(sim_stat)),
+            "std_stat": float(np.std(sim_stat)),
+            "median_stat": float(np.median(sim_stat)),
+            "p10": float(np.percentile(sim_stat, 10)),
+            "p90": float(np.percentile(sim_stat, 90)),
+            "pred_minutes": float(min_mean),
+            "pred_rate_per36": float(shrunk_rate),
+            "n_games_used": len(games),
+            "confidence": "high" if len(games) >= 10 else "medium",
+        }
+
+    def _opp_context_key(self) -> str:
+        """Return the game_context key for opponent allowed stat."""
+        return {
+            STAT_POINTS: "opp_pts_per_game",
+            STAT_REBOUNDS: "opp_reb_per_game",
+            STAT_STEALS: "opp_stl_per_game",
+            STAT_BLOCKS: "opp_blk_per_game",
+            STAT_TURNOVERS: "opp_tov_per_game",
+            STAT_ASSISTS: "opp_ast_per_game",
+        }.get(self.stat_type, "")
+
+
+def get_predictor(stat_type: str):
     """Factory to return the appropriate predictor for a stat type."""
     if stat_type == STAT_ASSISTS:
         return AssistsPredictor()
-    return ThreePMPredictor()
+    if stat_type == STAT_FG3M:
+        return ThreePMPredictor()
+    return BoxScorePredictor(stat_type)
 
 
 # ── Name matching ────────────────────────────────────────────────────────────
