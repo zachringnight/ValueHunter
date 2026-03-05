@@ -548,92 +548,546 @@ def scrape_bbref_game_logs(
     return all_logs
 
 
-# ── Opponent defensive context from game logs ────────────────────────────────
+# ── Opponent defensive context from NBA.com stats API ────────────────────────
+
+# NBA API team ID → BBRef abbreviation (handles mismatches)
+_NBA_ID_TO_BBREF = {
+    1610612737: "ATL", 1610612738: "BOS", 1610612751: "BRK",
+    1610612766: "CHO", 1610612741: "CHI", 1610612739: "CLE",
+    1610612742: "DAL", 1610612743: "DEN", 1610612765: "DET",
+    1610612744: "GSW", 1610612745: "HOU", 1610612754: "IND",
+    1610612746: "LAC", 1610612747: "LAL", 1610612763: "MEM",
+    1610612748: "MIA", 1610612749: "MIL", 1610612750: "MIN",
+    1610612740: "NOP", 1610612752: "NYK", 1610612760: "OKC",
+    1610612753: "ORL", 1610612755: "PHI", 1610612756: "PHO",
+    1610612757: "POR", 1610612758: "SAC", 1610612759: "SAS",
+    1610612761: "TOR", 1610612762: "UTA", 1610612764: "WAS",
+}
 
 
-def compute_opponent_stats(
-    player_logs: dict[str, list[dict]],
+def fetch_nba_opponent_shooting(
+    season: str = "2025-26",
+    cache_ttl_hours: int = 12,
 ) -> dict[str, dict]:
-    """Compute per-team defensive stats from all player game logs.
+    """Fetch opponent shooting by zone from NBA.com stats API.
 
-    Aggregates 3PA, 3PM, assists, and minutes allowed per game-date by opponent,
-    then returns per-team averages. This tells us how many 3PA/3PM/AST each
-    team allows per game on average.
+    Uses the LeagueDashTeamShotLocations endpoint with MeasureType=Opponent
+    and DistanceRange=By Zone to get real opponent 3PA/3PM by zone
+    (Left Corner 3, Right Corner 3, Above the Break 3).
 
     Returns dict keyed by BBRef team abbr:
         {
             "BOS": {
-                "opp_3pa_per_game": 37.2,
-                "opp_3pm_per_game": 13.1,
-                "opp_fg3_pct_allowed": 0.352,
-                "opp_ast_per_game": 25.3,
-                "games_sampled": 50,
+                "opp_3pa_per_game": 38.8,
+                "opp_3pm_per_game": 14.0,
+                "opp_fg3_pct_allowed": 0.361,
+                "opp_corner3_fga": 8.5,
+                "opp_corner3_pct": 0.375,
+                "opp_atb3_fga": 30.3,
+                "opp_atb3_pct": 0.357,
             },
             ...
         }
     """
-    # Accumulate per (opponent, date) → totals
-    # Each (opp, date) represents one game that opponent played
-    game_totals: dict[tuple[str, str], dict] = {}
+    cache_path = Path(f"/tmp/nba_opp_shooting_{season}.json")
 
-    for _player, games in player_logs.items():
-        for g in games:
-            opp = g.get("opp", "")
-            date = g.get("date", "")
-            if not opp or not date:
+    # Use cached data if fresh enough
+    if cache_path.exists():
+        mtime = datetime.fromtimestamp(cache_path.stat().st_mtime)
+        age_hours = (datetime.now() - mtime).total_seconds() / 3600
+        if age_hours < cache_ttl_hours:
+            with open(cache_path) as f:
+                data = json.load(f)
+            logger.info(
+                "Loaded cached NBA opponent shooting (%d teams, %.1fh old)",
+                len(data), age_hours,
+            )
+            return data
+
+    try:
+        from nba_api.stats.endpoints import leaguedashteamshotlocations
+        import time as _time
+
+        _time.sleep(0.6)  # rate-limit courtesy
+        result = leaguedashteamshotlocations.LeagueDashTeamShotLocations(
+            measure_type_simple="Opponent",
+            distance_range="By Zone",
+            per_mode_detailed="PerGame",
+            season=season,
+            season_type_all_star="Regular Season",
+        )
+        df = result.get_data_frames()[0]
+    except Exception as exc:
+        logger.warning("NBA API opponent shooting fetch failed: %s", exc)
+        # Fall back to cache even if stale
+        if cache_path.exists():
+            with open(cache_path) as f:
+                return json.load(f)
+        return {}
+
+    opp_data: dict[str, dict] = {}
+    for _, row in df.iterrows():
+        team_id = int(row[("", "TEAM_ID")])
+        bbref = _NBA_ID_TO_BBREF.get(team_id, "")
+        if not bbref:
+            continue
+
+        lc3_fga = float(row[("Left Corner 3", "OPP_FGA")])
+        lc3_fgm = float(row[("Left Corner 3", "OPP_FGM")])
+        lc3_pct = float(row[("Left Corner 3", "OPP_FG_PCT")])
+        rc3_fga = float(row[("Right Corner 3", "OPP_FGA")])
+        rc3_fgm = float(row[("Right Corner 3", "OPP_FGM")])
+        rc3_pct = float(row[("Right Corner 3", "OPP_FG_PCT")])
+        ab3_fga = float(row[("Above the Break 3", "OPP_FGA")])
+        ab3_fgm = float(row[("Above the Break 3", "OPP_FGM")])
+        ab3_pct = float(row[("Above the Break 3", "OPP_FG_PCT")])
+        c3_fga = float(row[("Corner 3", "OPP_FGA")])
+        c3_pct = float(row[("Corner 3", "OPP_FG_PCT")])
+
+        total_3pa = lc3_fga + rc3_fga + ab3_fga
+        total_3pm = lc3_fgm + rc3_fgm + ab3_fgm
+        total_pct = total_3pm / total_3pa if total_3pa > 0 else 0.0
+
+        opp_data[bbref] = {
+            "opp_3pa_per_game": round(total_3pa, 1),
+            "opp_3pm_per_game": round(total_3pm, 1),
+            "opp_fg3_pct_allowed": round(total_pct, 4),
+            "opp_corner3_fga": round(c3_fga, 1),
+            "opp_corner3_pct": round(c3_pct, 4),
+            "opp_atb3_fga": round(ab3_fga, 1),
+            "opp_atb3_pct": round(ab3_pct, 4),
+        }
+
+    # Cache the result
+    with open(cache_path, "w") as f:
+        json.dump(opp_data, f, indent=2)
+    logger.info("Fetched NBA opponent shooting for %d teams from NBA.com", len(opp_data))
+
+    return opp_data
+
+
+def fetch_nba_opponent_general(
+    season: str = "2025-26",
+    cache_ttl_hours: int = 12,
+) -> dict[str, dict]:
+    """Fetch general opponent stats (assists, pace) from NBA.com stats API.
+
+    Returns dict keyed by BBRef team abbr with opp_ast_per_game and pace.
+    """
+    cache_path = Path(f"/tmp/nba_opp_general_{season}.json")
+
+    if cache_path.exists():
+        mtime = datetime.fromtimestamp(cache_path.stat().st_mtime)
+        age_hours = (datetime.now() - mtime).total_seconds() / 3600
+        if age_hours < cache_ttl_hours:
+            with open(cache_path) as f:
+                return json.load(f)
+
+    try:
+        from nba_api.stats.endpoints import leaguedashteamstats
+        import time as _time
+
+        _time.sleep(0.6)
+        # Opponent stats
+        result = leaguedashteamstats.LeagueDashTeamStats(
+            measure_type_detailed_defense="Opponent",
+            per_mode_detailed="PerGame",
+            season=season,
+            season_type_all_star="Regular Season",
+        )
+        df = result.get_data_frames()[0]
+    except Exception as exc:
+        logger.warning("NBA API opponent general fetch failed: %s", exc)
+        if cache_path.exists():
+            with open(cache_path) as f:
+                return json.load(f)
+        return {}
+
+    opp_data: dict[str, dict] = {}
+    for _, row in df.iterrows():
+        team_id = int(row["TEAM_ID"])
+        bbref = _NBA_ID_TO_BBREF.get(team_id, "")
+        if not bbref:
+            continue
+        opp_data[bbref] = {
+            "opp_ast_per_game": round(float(row.get("OPP_AST", 0)), 1),
+            "opp_tov_per_game": round(float(row.get("OPP_TOV", 0)), 1),
+            "opp_pts_per_game": round(float(row.get("OPP_PTS", 0)), 1),
+            "pace": round(float(row.get("OPP_PACE", 0) if "OPP_PACE" in row else 0), 1),
+        }
+
+    with open(cache_path, "w") as f:
+        json.dump(opp_data, f, indent=2)
+    logger.info("Fetched NBA opponent general stats for %d teams", len(opp_data))
+    return opp_data
+
+
+def fetch_nba_team_advanced(
+    season: str = "2025-26",
+    cache_ttl_hours: int = 12,
+) -> dict[str, dict]:
+    """Fetch team advanced stats (pace, def rating) from NBA.com."""
+    cache_path = Path(f"/tmp/nba_team_advanced_{season}.json")
+
+    if cache_path.exists():
+        mtime = datetime.fromtimestamp(cache_path.stat().st_mtime)
+        age_hours = (datetime.now() - mtime).total_seconds() / 3600
+        if age_hours < cache_ttl_hours:
+            with open(cache_path) as f:
+                return json.load(f)
+
+    try:
+        from nba_api.stats.endpoints import leaguedashteamstats
+        import time as _time
+
+        _time.sleep(0.6)
+        result = leaguedashteamstats.LeagueDashTeamStats(
+            measure_type_detailed_defense="Advanced",
+            per_mode_detailed="PerGame",
+            season=season,
+            season_type_all_star="Regular Season",
+        )
+        df = result.get_data_frames()[0]
+    except Exception as exc:
+        logger.warning("NBA API team advanced fetch failed: %s", exc)
+        if cache_path.exists():
+            with open(cache_path) as f:
+                return json.load(f)
+        return {}
+
+    data: dict[str, dict] = {}
+    for _, row in df.iterrows():
+        team_id = int(row["TEAM_ID"])
+        bbref = _NBA_ID_TO_BBREF.get(team_id, "")
+        if not bbref:
+            continue
+        data[bbref] = {
+            "pace": round(float(row.get("PACE", 100)), 2),
+            "def_rating": round(float(row.get("DEF_RATING", 110)), 1),
+            "off_rating": round(float(row.get("OFF_RATING", 110)), 1),
+            "net_rating": round(float(row.get("NET_RATING", 0)), 1),
+        }
+
+    with open(cache_path, "w") as f:
+        json.dump(data, f, indent=2)
+    logger.info("Fetched NBA team advanced stats for %d teams", len(data))
+    return data
+
+
+def fetch_nba_opp_tracking_shooting(
+    season: str = "2025-26",
+    cache_ttl_hours: int = 12,
+) -> dict[str, dict]:
+    """Fetch opponent tracking shot data by defender distance from NBA.com.
+
+    Returns per-team dict with wide-open (6+ft), open (4-6ft), tight (2-4ft),
+    and catch-and-shoot 3PA/3PM allowed per game.
+    """
+    cache_path = Path(f"/tmp/nba_opp_tracking_{season}.json")
+
+    if cache_path.exists():
+        mtime = datetime.fromtimestamp(cache_path.stat().st_mtime)
+        age_hours = (datetime.now() - mtime).total_seconds() / 3600
+        if age_hours < cache_ttl_hours:
+            with open(cache_path) as f:
+                data = json.load(f)
+            logger.info(
+                "Loaded cached NBA opponent tracking (%d teams, %.1fh old)",
+                len(data), age_hours,
+            )
+            return data
+
+    try:
+        from nba_api.stats.endpoints import leaguedashoppptshot
+        import time as _time
+
+        data: dict[str, dict] = {}
+
+        # Wide open (6+ feet)
+        _time.sleep(0.6)
+        r1 = leaguedashoppptshot.LeagueDashOppPtShot(
+            per_mode_simple="PerGame", season=season,
+            season_type_all_star="Regular Season",
+            close_def_dist_range_nullable="6+ Feet - Wide Open",
+        )
+        df1 = r1.get_data_frames()[0]
+        for _, row in df1.iterrows():
+            team_id = int(row["TEAM_ID"])
+            bbref = _NBA_ID_TO_BBREF.get(team_id, "")
+            if not bbref:
                 continue
-            key = (opp, date)
-            if key not in game_totals:
-                game_totals[key] = {"fg3a": 0, "fg3m": 0, "ast": 0, "mp": 0.0}
-            game_totals[key]["fg3a"] += g.get("fg3a", 0)
-            game_totals[key]["fg3m"] += g.get("fg3", 0)
-            game_totals[key]["ast"] += g.get("ast", 0)
-            game_totals[key]["mp"] += g.get("mp", 0.0)
+            data.setdefault(bbref, {})
+            data[bbref]["opp_wide_open_3pa"] = round(float(row["FG3A"]), 2)
+            data[bbref]["opp_wide_open_3pm"] = round(float(row["FG3M"]), 2)
+            data[bbref]["opp_wide_open_3pct"] = round(float(row["FG3_PCT"]), 4)
 
-    # Aggregate per opponent team
-    team_agg: dict[str, dict] = {}
-    for (opp, _date), totals in game_totals.items():
-        if opp not in team_agg:
-            team_agg[opp] = {"fg3a": 0, "fg3m": 0, "ast": 0, "games": 0}
-        team_agg[opp]["fg3a"] += totals["fg3a"]
-        team_agg[opp]["fg3m"] += totals["fg3m"]
-        team_agg[opp]["ast"] += totals["ast"]
-        team_agg[opp]["games"] += 1
+        # Open (4-6 feet)
+        _time.sleep(0.6)
+        r2 = leaguedashoppptshot.LeagueDashOppPtShot(
+            per_mode_simple="PerGame", season=season,
+            season_type_all_star="Regular Season",
+            close_def_dist_range_nullable="4-6 Feet - Open",
+        )
+        df2 = r2.get_data_frames()[0]
+        for _, row in df2.iterrows():
+            team_id = int(row["TEAM_ID"])
+            bbref = _NBA_ID_TO_BBREF.get(team_id, "")
+            if not bbref:
+                continue
+            data.setdefault(bbref, {})
+            data[bbref]["opp_open_3pa"] = round(float(row["FG3A"]), 2)
+            data[bbref]["opp_open_3pm"] = round(float(row["FG3M"]), 2)
+            data[bbref]["opp_open_3pct"] = round(float(row["FG3_PCT"]), 4)
 
-    # First pass: compute per-team averages
-    raw_result = {}
-    for team, agg in team_agg.items():
-        n = max(agg["games"], 1)
-        fg3a_pg = agg["fg3a"] / n
-        fg3m_pg = agg["fg3m"] / n
-        raw_result[team] = {
-            "opp_3pa_per_game": fg3a_pg,
-            "opp_3pm_per_game": fg3m_pg,
-            "opp_fg3_pct_allowed": fg3m_pg / max(fg3a_pg, 1),
-            "opp_ast_per_game": agg["ast"] / n,
-            "games_sampled": n,
-        }
+        # Tight (2-4 feet)
+        _time.sleep(0.6)
+        r3 = leaguedashoppptshot.LeagueDashOppPtShot(
+            per_mode_simple="PerGame", season=season,
+            season_type_all_star="Regular Season",
+            close_def_dist_range_nullable="2-4 Feet - Tight",
+        )
+        df3 = r3.get_data_frames()[0]
+        for _, row in df3.iterrows():
+            team_id = int(row["TEAM_ID"])
+            bbref = _NBA_ID_TO_BBREF.get(team_id, "")
+            if not bbref:
+                continue
+            data.setdefault(bbref, {})
+            data[bbref]["opp_tight_3pa"] = round(float(row["FG3A"]), 2)
+            data[bbref]["opp_tight_3pm"] = round(float(row["FG3M"]), 2)
+            data[bbref]["opp_tight_3pct"] = round(float(row["FG3_PCT"]), 4)
 
-    # Compute cross-team averages from our (partial) data so that ratios
-    # are relative, not biased by having only a subset of players.
-    if raw_result:
-        all_3pa = [v["opp_3pa_per_game"] for v in raw_result.values()]
-        all_ast = [v["opp_ast_per_game"] for v in raw_result.values()]
-        avg_3pa = sum(all_3pa) / len(all_3pa)
-        avg_ast = sum(all_ast) / len(all_ast)
-    else:
-        avg_3pa, avg_ast = 1.0, 1.0
+        # Catch-and-shoot (0 dribbles)
+        _time.sleep(0.6)
+        r4 = leaguedashoppptshot.LeagueDashOppPtShot(
+            per_mode_simple="PerGame", season=season,
+            season_type_all_star="Regular Season",
+            dribble_range_nullable="0 Dribbles",
+        )
+        df4 = r4.get_data_frames()[0]
+        for _, row in df4.iterrows():
+            team_id = int(row["TEAM_ID"])
+            bbref = _NBA_ID_TO_BBREF.get(team_id, "")
+            if not bbref:
+                continue
+            data.setdefault(bbref, {})
+            data[bbref]["opp_catch_shoot_3pa"] = round(float(row["FG3A"]), 2)
+            data[bbref]["opp_catch_shoot_3pm"] = round(float(row["FG3M"]), 2)
+            data[bbref]["opp_catch_shoot_3pct"] = round(float(row["FG3_PCT"]), 4)
 
-    # Store the sample averages so callers can compute ratios correctly
-    result = {}
-    for team, stats in raw_result.items():
-        result[team] = {
-            **stats,
-            "sample_avg_3pa": avg_3pa,
-            "sample_avg_ast": avg_ast,
-        }
+        # Pull-up (3-6 dribbles)
+        _time.sleep(0.6)
+        r5 = leaguedashoppptshot.LeagueDashOppPtShot(
+            per_mode_simple="PerGame", season=season,
+            season_type_all_star="Regular Season",
+            dribble_range_nullable="3-6 Dribbles",
+        )
+        df5 = r5.get_data_frames()[0]
+        for _, row in df5.iterrows():
+            team_id = int(row["TEAM_ID"])
+            bbref = _NBA_ID_TO_BBREF.get(team_id, "")
+            if not bbref:
+                continue
+            data.setdefault(bbref, {})
+            data[bbref]["opp_pullup_3pa"] = round(float(row["FG3A"]), 2)
+            data[bbref]["opp_pullup_3pm"] = round(float(row["FG3M"]), 2)
+            data[bbref]["opp_pullup_3pct"] = round(float(row["FG3_PCT"]), 4)
 
-    return result
+    except Exception as exc:
+        logger.warning("NBA API opponent tracking fetch failed: %s", exc)
+        if cache_path.exists():
+            with open(cache_path) as f:
+                return json.load(f)
+        return {}
+
+    with open(cache_path, "w") as f:
+        json.dump(data, f, indent=2)
+    logger.info("Fetched NBA opponent tracking for %d teams", len(data))
+    return data
+
+
+def fetch_nba_player_shooting(
+    season: str = "2025-26",
+    cache_ttl_hours: int = 12,
+) -> dict[str, dict]:
+    """Fetch player shooting profiles from NBA.com.
+
+    Returns per-player dict with:
+    - Shooting by zone (corner 3, above-the-break 3)
+    - Catch-and-shoot vs pull-up splits
+    - Wide-open vs contested splits
+    """
+    cache_path = Path(f"/tmp/nba_player_shooting_{season}.json")
+
+    if cache_path.exists():
+        mtime = datetime.fromtimestamp(cache_path.stat().st_mtime)
+        age_hours = (datetime.now() - mtime).total_seconds() / 3600
+        if age_hours < cache_ttl_hours:
+            with open(cache_path) as f:
+                data = json.load(f)
+            logger.info(
+                "Loaded cached NBA player shooting (%d players, %.1fh old)",
+                len(data), age_hours,
+            )
+            return data
+
+    data: dict[str, dict] = {}
+
+    try:
+        from nba_api.stats.endpoints import (
+            leaguedashplayershotlocations,
+            leaguedashplayerptshot,
+        )
+        import time as _time
+
+        # 1. Player shooting by zone
+        _time.sleep(0.6)
+        r_zone = leaguedashplayershotlocations.LeagueDashPlayerShotLocations(
+            measure_type_simple="Base",
+            distance_range="By Zone",
+            per_mode_detailed="PerGame",
+            season=season,
+            season_type_all_star="Regular Season",
+        )
+        df_zone = r_zone.get_data_frames()[0]
+
+        for _, row in df_zone.iterrows():
+            name = str(row[("", "PLAYER_NAME")])
+            key = name.lower()
+
+            lc3_fga = float(row[("Left Corner 3", "FGA")])
+            lc3_fgm = float(row[("Left Corner 3", "FGM")])
+            rc3_fga = float(row[("Right Corner 3", "FGA")])
+            rc3_fgm = float(row[("Right Corner 3", "FGM")])
+            ab3_fga = float(row[("Above the Break 3", "FGA")])
+            ab3_fgm = float(row[("Above the Break 3", "FGM")])
+            c3_fga = float(row[("Corner 3", "FGA")])
+            c3_fgm = float(row[("Corner 3", "FGM")])
+
+            total_3pa = lc3_fga + rc3_fga + ab3_fga
+            total_3pm = lc3_fgm + rc3_fgm + ab3_fgm
+
+            data[key] = {
+                "name": name,
+                "total_3pa_pg": round(total_3pa, 2),
+                "total_3pm_pg": round(total_3pm, 2),
+                "total_3pct": round(total_3pm / total_3pa, 4) if total_3pa > 0 else 0.0,
+                "corner3_fga": round(c3_fga, 2),
+                "corner3_fgm": round(c3_fgm, 2),
+                "corner3_pct": round(c3_fgm / c3_fga, 4) if c3_fga > 0 else 0.0,
+                "atb3_fga": round(ab3_fga, 2),
+                "atb3_fgm": round(ab3_fgm, 2),
+                "atb3_pct": round(ab3_fgm / ab3_fga, 4) if ab3_fga > 0 else 0.0,
+                # Fraction of 3PA that come from corners vs above-the-break
+                "corner3_share": round(c3_fga / total_3pa, 3) if total_3pa > 0 else 0.0,
+                "atb3_share": round(ab3_fga / total_3pa, 3) if total_3pa > 0 else 0.0,
+            }
+
+        # 2. Catch-and-shoot (0 dribbles)
+        _time.sleep(0.6)
+        r_cs = leaguedashplayerptshot.LeagueDashPlayerPtShot(
+            per_mode_simple="PerGame", season=season,
+            season_type_all_star="Regular Season",
+            dribble_range_nullable="0 Dribbles",
+        )
+        df_cs = r_cs.get_data_frames()[0]
+        for _, row in df_cs.iterrows():
+            key = row["PLAYER_NAME"].lower()
+            if key not in data:
+                data[key] = {"name": row["PLAYER_NAME"]}
+            data[key]["catch_shoot_3pa"] = round(float(row["FG3A"]), 2)
+            data[key]["catch_shoot_3pm"] = round(float(row["FG3M"]), 2)
+            data[key]["catch_shoot_3pct"] = round(float(row["FG3_PCT"]), 4)
+
+        # 3. Pull-up (1-2 dribbles — common pull-up range)
+        _time.sleep(0.6)
+        r_pu = leaguedashplayerptshot.LeagueDashPlayerPtShot(
+            per_mode_simple="PerGame", season=season,
+            season_type_all_star="Regular Season",
+            dribble_range_nullable="1 Dribble",
+        )
+        df_pu = r_pu.get_data_frames()[0]
+        for _, row in df_pu.iterrows():
+            key = row["PLAYER_NAME"].lower()
+            if key not in data:
+                data[key] = {"name": row["PLAYER_NAME"]}
+            data[key]["pullup_1d_3pa"] = round(float(row["FG3A"]), 2)
+            data[key]["pullup_1d_3pm"] = round(float(row["FG3M"]), 2)
+            data[key]["pullup_1d_3pct"] = round(float(row["FG3_PCT"]), 4)
+
+        # 4. Self-created (7+ dribbles)
+        _time.sleep(0.6)
+        r_sc = leaguedashplayerptshot.LeagueDashPlayerPtShot(
+            per_mode_simple="PerGame", season=season,
+            season_type_all_star="Regular Season",
+            dribble_range_nullable="7+ Dribbles",
+        )
+        df_sc = r_sc.get_data_frames()[0]
+        for _, row in df_sc.iterrows():
+            key = row["PLAYER_NAME"].lower()
+            if key not in data:
+                data[key] = {"name": row["PLAYER_NAME"]}
+            data[key]["self_created_3pa"] = round(float(row["FG3A"]), 2)
+            data[key]["self_created_3pm"] = round(float(row["FG3M"]), 2)
+            data[key]["self_created_3pct"] = round(float(row["FG3_PCT"]), 4)
+
+        # 5. Wide open (6+ feet)
+        _time.sleep(0.6)
+        r_wo = leaguedashplayerptshot.LeagueDashPlayerPtShot(
+            per_mode_simple="PerGame", season=season,
+            season_type_all_star="Regular Season",
+            close_def_dist_range_nullable="6+ Feet - Wide Open",
+        )
+        df_wo = r_wo.get_data_frames()[0]
+        for _, row in df_wo.iterrows():
+            key = row["PLAYER_NAME"].lower()
+            if key not in data:
+                data[key] = {"name": row["PLAYER_NAME"]}
+            data[key]["wide_open_3pa"] = round(float(row["FG3A"]), 2)
+            data[key]["wide_open_3pm"] = round(float(row["FG3M"]), 2)
+            data[key]["wide_open_3pct"] = round(float(row["FG3_PCT"]), 4)
+
+        # 6. Tight (2-4 feet)
+        _time.sleep(0.6)
+        r_tight = leaguedashplayerptshot.LeagueDashPlayerPtShot(
+            per_mode_simple="PerGame", season=season,
+            season_type_all_star="Regular Season",
+            close_def_dist_range_nullable="2-4 Feet - Tight",
+        )
+        df_tight = r_tight.get_data_frames()[0]
+        for _, row in df_tight.iterrows():
+            key = row["PLAYER_NAME"].lower()
+            if key not in data:
+                data[key] = {"name": row["PLAYER_NAME"]}
+            data[key]["tight_3pa"] = round(float(row["FG3A"]), 2)
+            data[key]["tight_3pm"] = round(float(row["FG3M"]), 2)
+            data[key]["tight_3pct"] = round(float(row["FG3_PCT"]), 4)
+
+    except Exception as exc:
+        logger.warning("NBA API player shooting fetch failed: %s", exc)
+        if cache_path.exists():
+            with open(cache_path) as f:
+                return json.load(f)
+        return {}
+
+    # Compute derived fields: catch-and-shoot share of total 3PA
+    for key, p in data.items():
+        total = p.get("total_3pa_pg", 0)
+        if total > 0:
+            p["catch_shoot_share"] = round(
+                p.get("catch_shoot_3pa", 0) / total, 3
+            )
+            p["self_created_share"] = round(
+                p.get("self_created_3pa", 0) / total, 3
+            )
+            p["wide_open_share"] = round(
+                p.get("wide_open_3pa", 0) / total, 3
+            )
+
+    with open(cache_path, "w") as f:
+        json.dump(data, f, indent=2)
+    logger.info("Fetched NBA player shooting for %d players", len(data))
+    return data
 
 
 # ── Model: Empirical Bayes 3PM predictor ─────────────────────────────────────
@@ -656,14 +1110,13 @@ class ThreePMPredictor:
         n_sims: int = 25000,
         game_context: dict | None = None,
     ) -> dict:
-        """Predict 3PM distribution with optional game-context adjustments.
+        """Predict 3PM distribution with scheme-matchup-aware adjustments.
 
-        game_context keys (all optional):
-            spread: float       — home spread (negative = favored)
-            total: float        — game total (O/U)
-            opp_3pa_per_game: float — opponent 3PA allowed per game
-            opp_fg3_pct_allowed: float — opponent 3PT% allowed
-            is_home: bool
+        Uses player shooting profile × opponent defensive profile to compute
+        weighted attempt-rate and make-rate adjustments by shot type:
+        - Corner 3 vs ATB 3 (zone matchup)
+        - Catch-and-shoot vs pull-up (creation matchup)
+        - Wide-open vs contested (closeout matchup)
         """
         if len(recent_games) < 5:
             return {"p_over": 0.5, "mean_stat": line, "confidence": "low",
@@ -680,15 +1133,12 @@ class ThreePMPredictor:
         min_std = max(float(np.std(minutes)), 1.0)
 
         spread = ctx.get("spread", 0.0)
-        # Large spreads (|spread| > 8) compress starter minutes due to
-        # garbage time.  Apply a mild haircut: ~2-4% per point beyond 8.
         if abs(spread) > 8 and min_mean > 20:
             blowout_excess = abs(spread) - 8
-            # Cap the adjustment at ~12% reduction (3 minutes off ~28)
             minutes_adj = 1.0 - min(blowout_excess * 0.02, 0.12)
             min_mean *= minutes_adj
 
-        # ── 3PA rate with opponent adjustment ────────────────────────
+        # ── 3PA rate: base with shrinkage ────────────────────────────
         total_min = np.sum(minutes)
         total_3pa = np.sum(fg3a)
         raw_rate = total_3pa / max(total_min, 1) * 36.0
@@ -699,36 +1149,91 @@ class ThreePMPredictor:
             / (n_eff + self.prior_strength)
         )
 
-        # Opponent 3PA adjustment: if the opponent allows more/fewer 3PA
-        # than sample average, scale the player's attempt rate proportionally.
+        # ── Scheme matchup: attempt rate adjustment ──────────────────
+        # Instead of a single blanket ratio, weight the opponent's
+        # defensive profile by HOW this player takes their 3s.
         opp_3pa = ctx.get("opp_3pa_per_game", 0.0)
         sample_avg_3pa = ctx.get("sample_avg_3pa", 0.0)
-        if opp_3pa > 0 and sample_avg_3pa > 0:
+
+        # Player's shot creation profile
+        cs_share = ctx.get("player_catch_shoot_share", 0.0)
+        sc_share = ctx.get("player_self_created_share", 0.0)
+
+        if opp_3pa > 0 and sample_avg_3pa > 0 and (cs_share > 0 or sc_share > 0):
+            # Catch-and-shoot weighted by how many open looks opp gives up
+            opp_cs_3pa = ctx.get("opp_catch_shoot_3pa", 0.0)
+            avg_cs_3pa = ctx.get("sample_avg_catch_shoot_3pa", 20.0)
+            cs_ratio = opp_cs_3pa / avg_cs_3pa if avg_cs_3pa > 0 and opp_cs_3pa > 0 else 1.0
+
+            # Wide-open weighted by how many uncontested looks opp gives up
+            opp_wo_3pa = ctx.get("opp_wide_open_3pa", 0.0)
+            avg_wo_3pa = ctx.get("sample_avg_wide_open_3pa", 15.0)
+            wo_ratio = opp_wo_3pa / avg_wo_3pa if avg_wo_3pa > 0 and opp_wo_3pa > 0 else 1.0
+
+            # Overall opponent ratio (fallback)
+            overall_ratio = opp_3pa / sample_avg_3pa
+
+            # Weighted blend: catch-and-shoot players are more affected
+            # by the opponent's ability to close out; self-creators less so
+            remaining_share = max(1.0 - cs_share - sc_share, 0.0)
+            matchup_ratio = (
+                cs_share * (0.5 * cs_ratio + 0.5 * wo_ratio)
+                + sc_share * 1.0  # self-creators are opponent-independent
+                + remaining_share * overall_ratio
+            )
+            matchup_ratio = np.clip(matchup_ratio, 0.85, 1.15)
+            shrunk_rate *= matchup_ratio
+
+        elif opp_3pa > 0 and sample_avg_3pa > 0:
+            # Fallback: simple overall ratio
             opp_3pa_ratio = np.clip(opp_3pa / sample_avg_3pa, 0.85, 1.15)
             shrunk_rate *= opp_3pa_ratio
 
-        # Game-total adjustment: higher totals → more possessions → more
-        # shot attempts.  Normalize against typical total (~228).
-        game_total = ctx.get("total", 0.0)
-        if game_total > 0:
-            pace_ratio = np.clip(game_total / 228.0, 0.90, 1.10)
+        # Pace adjustment from real team pace data
+        team_pace = ctx.get("team_pace", 0.0)
+        opp_pace = ctx.get("opp_pace", 0.0)
+        if team_pace > 0 and opp_pace > 0:
+            # Expected game pace is average of both teams
+            expected_pace = (team_pace + opp_pace) / 2.0
+            pace_ratio = np.clip(expected_pace / 100.0, 0.90, 1.10)
             shrunk_rate *= pace_ratio
+        else:
+            # Fall back to game total if no pace data
+            game_total = ctx.get("total", 0.0)
+            if game_total > 0:
+                pace_ratio = np.clip(game_total / 228.0, 0.90, 1.10)
+                shrunk_rate *= pace_ratio
 
-        # ── Make rate with opponent FG3% adjustment ──────────────────
+        # ── Make rate: zone-weighted opponent FG3% adjustment ────────
         total_3pm = np.sum(fg3m)
         shrunk_pct = (
             (total_3pm + LEAGUE_3PT_PCT * self.prior_strength)
             / (total_3pa + self.prior_strength)
         )
 
-        # If opponent allows a different FG3% than league average, nudge
-        # the make rate.  Use 50% weight so we don't overfit to noisy
-        # defensive splits.
-        opp_fg3_pct = ctx.get("opp_fg3_pct_allowed", 0.0)
-        if opp_fg3_pct > 0:
-            fg3_diff = opp_fg3_pct - LEAGUE_3PT_PCT
+        # Zone-weighted FG3% adjustment: weight opponent's corner vs ATB
+        # defense by how this player distributes their shots
+        corner_share = ctx.get("player_corner3_share", 0.0)
+        atb_share = ctx.get("player_atb3_share", 0.0)
+        opp_corner3_pct = ctx.get("opp_corner3_pct", 0.0)
+        opp_atb3_pct = ctx.get("opp_atb3_pct", 0.0)
+
+        if corner_share > 0 and atb_share > 0 and opp_corner3_pct > 0:
+            # Weighted opponent FG3% based on player's zone distribution
+            weighted_opp_pct = (
+                corner_share * opp_corner3_pct
+                + atb_share * opp_atb3_pct
+            )
+            fg3_diff = weighted_opp_pct - LEAGUE_3PT_PCT
             shrunk_pct += fg3_diff * 0.5
-            shrunk_pct = np.clip(shrunk_pct, 0.15, 0.55)
+        else:
+            # Fallback: overall opponent FG3%
+            opp_fg3_pct = ctx.get("opp_fg3_pct_allowed", 0.0)
+            if opp_fg3_pct > 0:
+                fg3_diff = opp_fg3_pct - LEAGUE_3PT_PCT
+                shrunk_pct += fg3_diff * 0.5
+
+        shrunk_pct = float(np.clip(shrunk_pct, 0.15, 0.55))
 
         # ── Monte Carlo ──────────────────────────────────────────────
         rng = np.random.default_rng()
@@ -820,11 +1325,18 @@ class AssistsPredictor:
             opp_ast_ratio = np.clip(opp_ast / sample_avg_ast, 0.85, 1.15)
             shrunk_rate *= opp_ast_ratio
 
-        # Game-total / pace adjustment
-        game_total = ctx.get("total", 0.0)
-        if game_total > 0:
-            pace_ratio = np.clip(game_total / 228.0, 0.90, 1.10)
+        # Pace adjustment from real team pace data
+        team_pace = ctx.get("team_pace", 0.0)
+        opp_pace = ctx.get("opp_pace", 0.0)
+        if team_pace > 0 and opp_pace > 0:
+            expected_pace = (team_pace + opp_pace) / 2.0
+            pace_ratio = np.clip(expected_pace / 100.0, 0.90, 1.10)
             shrunk_rate *= pace_ratio
+        else:
+            game_total = ctx.get("total", 0.0)
+            if game_total > 0:
+                pace_ratio = np.clip(game_total / 228.0, 0.90, 1.10)
+                shrunk_rate *= pace_ratio
 
         # ── Overdispersion estimate ──────────────────────────────────
         if len(games) >= 5 and np.mean(assists) > 0:
@@ -1103,8 +1615,32 @@ def predict_live(
     for pname, logs in player_logs.items():
         log_index[pname.lower()] = {g["date"]: g for g in logs}
 
-    # Compute opponent defensive averages from all game logs
-    opp_stats = compute_opponent_stats(player_logs)
+    # Fetch real opponent defensive stats from NBA.com
+    opp_shooting = fetch_nba_opponent_shooting()
+    opp_general = fetch_nba_opponent_general()
+    team_advanced = fetch_nba_team_advanced()
+    opp_tracking = fetch_nba_opp_tracking_shooting()
+    player_shooting = fetch_nba_player_shooting()
+
+    # Compute league averages from the real data for ratio normalization
+    if opp_shooting:
+        all_3pa = [v["opp_3pa_per_game"] for v in opp_shooting.values()]
+        league_avg_3pa = sum(all_3pa) / len(all_3pa)
+    else:
+        league_avg_3pa = LEAGUE_AVG_3PA_PER_GAME
+    if opp_general:
+        all_ast = [v.get("opp_ast_per_game", 0) for v in opp_general.values()]
+        league_avg_ast = sum(all_ast) / len(all_ast) if all_ast else LEAGUE_AVG_AST_PER_GAME
+    else:
+        league_avg_ast = LEAGUE_AVG_AST_PER_GAME
+    # Tracking averages for ratio calculations
+    if opp_tracking:
+        all_wo = [v.get("opp_wide_open_3pa", 0) for v in opp_tracking.values()]
+        all_cs = [v.get("opp_catch_shoot_3pa", 0) for v in opp_tracking.values()]
+        avg_wide_open_3pa = sum(all_wo) / len(all_wo) if all_wo else 15.0
+        avg_catch_shoot_3pa = sum(all_cs) / len(all_cs) if all_cs else 20.0
+    else:
+        avg_wide_open_3pa, avg_catch_shoot_3pa = 15.0, 20.0
 
     for prop in props:
         matched = _find_player_logs(prop.player_name, log_index)
@@ -1120,17 +1656,81 @@ def predict_live(
             all_games, prop._home_abbr, prop._away_abbr,
         )
 
-        # Build game context dict
-        opp_def = opp_stats.get(opp_team, {})
+        # Build game context dict from real NBA.com data
+        opp_shot = opp_shooting.get(opp_team, {})
+        opp_gen = opp_general.get(opp_team, {})
+        opp_adv = team_advanced.get(opp_team, {})
+        opp_trk = opp_tracking.get(opp_team, {})
+        player_team_adv = team_advanced.get(player_team, {})
+
+        # Player shooting profile (try exact match then fuzzy)
+        player_key = prop.player_name.lower()
+        player_prof = player_shooting.get(player_key, {})
+        if not player_prof:
+            # Try matching against player shooting keys
+            for ps_key in player_shooting:
+                if _names_match(player_key, ps_key):
+                    player_prof = player_shooting[ps_key]
+                    break
+
         game_context = {
+            # Game-level
             "spread": prop.spread if is_home else -prop.spread,
             "total": prop.total,
             "is_home": is_home,
-            "opp_3pa_per_game": opp_def.get("opp_3pa_per_game", 0.0),
-            "opp_fg3_pct_allowed": opp_def.get("opp_fg3_pct_allowed", 0.0),
-            "opp_ast_per_game": opp_def.get("opp_ast_per_game", 0.0),
-            "sample_avg_3pa": opp_def.get("sample_avg_3pa", 0.0),
-            "sample_avg_ast": opp_def.get("sample_avg_ast", 0.0),
+
+            # Opponent shooting by zone (NBA.com)
+            "opp_3pa_per_game": opp_shot.get("opp_3pa_per_game", 0.0),
+            "opp_3pm_per_game": opp_shot.get("opp_3pm_per_game", 0.0),
+            "opp_fg3_pct_allowed": opp_shot.get("opp_fg3_pct_allowed", 0.0),
+            "opp_corner3_fga": opp_shot.get("opp_corner3_fga", 0.0),
+            "opp_corner3_pct": opp_shot.get("opp_corner3_pct", 0.0),
+            "opp_atb3_fga": opp_shot.get("opp_atb3_fga", 0.0),
+            "opp_atb3_pct": opp_shot.get("opp_atb3_pct", 0.0),
+
+            # Opponent tracking defense (NBA.com)
+            "opp_wide_open_3pa": opp_trk.get("opp_wide_open_3pa", 0.0),
+            "opp_wide_open_3pct": opp_trk.get("opp_wide_open_3pct", 0.0),
+            "opp_open_3pa": opp_trk.get("opp_open_3pa", 0.0),
+            "opp_open_3pct": opp_trk.get("opp_open_3pct", 0.0),
+            "opp_tight_3pa": opp_trk.get("opp_tight_3pa", 0.0),
+            "opp_tight_3pct": opp_trk.get("opp_tight_3pct", 0.0),
+            "opp_catch_shoot_3pa": opp_trk.get("opp_catch_shoot_3pa", 0.0),
+            "opp_catch_shoot_3pct": opp_trk.get("opp_catch_shoot_3pct", 0.0),
+            "opp_pullup_3pa": opp_trk.get("opp_pullup_3pa", 0.0),
+            "opp_pullup_3pct": opp_trk.get("opp_pullup_3pct", 0.0),
+
+            # Opponent general stats
+            "opp_ast_per_game": opp_gen.get("opp_ast_per_game", 0.0),
+            "opp_tov_per_game": opp_gen.get("opp_tov_per_game", 0.0),
+            "opp_pts_per_game": opp_gen.get("opp_pts_per_game", 0.0),
+
+            # Team advanced (pace, ratings)
+            "opp_pace": opp_adv.get("pace", 100.0),
+            "opp_def_rating": opp_adv.get("def_rating", 110.0),
+            "team_pace": player_team_adv.get("pace", 100.0),
+
+            # Player shooting profile (NBA.com)
+            "player_corner3_share": player_prof.get("corner3_share", 0.0),
+            "player_atb3_share": player_prof.get("atb3_share", 0.0),
+            "player_catch_shoot_share": player_prof.get("catch_shoot_share", 0.0),
+            "player_catch_shoot_3pa": player_prof.get("catch_shoot_3pa", 0.0),
+            "player_catch_shoot_3pct": player_prof.get("catch_shoot_3pct", 0.0),
+            "player_self_created_share": player_prof.get("self_created_share", 0.0),
+            "player_self_created_3pa": player_prof.get("self_created_3pa", 0.0),
+            "player_wide_open_3pa": player_prof.get("wide_open_3pa", 0.0),
+            "player_wide_open_3pct": player_prof.get("wide_open_3pct", 0.0),
+            "player_tight_3pa": player_prof.get("tight_3pa", 0.0),
+            "player_tight_3pct": player_prof.get("tight_3pct", 0.0),
+            "player_corner3_pct": player_prof.get("corner3_pct", 0.0),
+            "player_atb3_pct": player_prof.get("atb3_pct", 0.0),
+            "player_total_3pa_pg": player_prof.get("total_3pa_pg", 0.0),
+
+            # League averages for ratio calculations
+            "sample_avg_3pa": league_avg_3pa,
+            "sample_avg_ast": league_avg_ast,
+            "sample_avg_wide_open_3pa": avg_wide_open_3pa,
+            "sample_avg_catch_shoot_3pa": avg_catch_shoot_3pa,
         }
 
         # Get the right predictor for this stat type
