@@ -906,6 +906,419 @@ def fetch_nba_opp_tracking_shooting(
     return data
 
 
+def fetch_nba_synergy_defense(
+    season: str = "2025-26",
+    cache_ttl_hours: int = 12,
+) -> dict[str, dict]:
+    """Fetch team defensive synergy play type data from NBA.com.
+
+    Returns how each team defends specific play types: spot-up, isolation,
+    P&R ball handler, off-screen, transition, handoff — with PPP, FG%,
+    EFG%, possessions, and percentile.
+    """
+    cache_path = Path(f"/tmp/nba_synergy_defense_{season}.json")
+
+    if cache_path.exists():
+        mtime = datetime.fromtimestamp(cache_path.stat().st_mtime)
+        age_hours = (datetime.now() - mtime).total_seconds() / 3600
+        if age_hours < cache_ttl_hours:
+            with open(cache_path) as f:
+                data = json.load(f)
+            logger.info(
+                "Loaded cached synergy defense (%d teams, %.1fh old)",
+                len(data), age_hours,
+            )
+            return data
+
+    try:
+        from nba_api.stats.endpoints import synergyplaytypes
+        import time as _time
+
+        data: dict[str, dict] = {}
+        play_types = [
+            "Spotup", "Isolation", "PRBallHandler", "PRRollman",
+            "OffScreen", "Transition", "Handoff", "Cut",
+        ]
+
+        for pt in play_types:
+            _time.sleep(0.6)
+            r = synergyplaytypes.SynergyPlayTypes(
+                per_mode_simple="PerGame",
+                play_type_nullable=pt,
+                type_grouping_nullable="defensive",
+                season=season,
+                season_type_all_star="Regular Season",
+                player_or_team_abbreviation="T",
+            )
+            df = r.get_data_frames()[0]
+            pt_key = pt.lower()
+
+            for _, row in df.iterrows():
+                team_id = int(row["TEAM_ID"])
+                bbref = _NBA_ID_TO_BBREF.get(team_id, "")
+                if not bbref:
+                    continue
+                data.setdefault(bbref, {})
+                data[bbref][f"def_{pt_key}_ppp"] = round(float(row.get("PPP", 0)), 3)
+                data[bbref][f"def_{pt_key}_fg_pct"] = round(float(row.get("FG_PCT", 0)), 4)
+                data[bbref][f"def_{pt_key}_efg"] = round(float(row.get("EFG_PCT", 0)), 4)
+                data[bbref][f"def_{pt_key}_poss"] = round(float(row.get("POSS", 0)), 1)
+                data[bbref][f"def_{pt_key}_percentile"] = round(float(row.get("PERCENTILE", 0)), 3)
+                data[bbref][f"def_{pt_key}_freq"] = round(float(row.get("POSS_PCT", 0)), 4)
+                data[bbref][f"def_{pt_key}_tov_pct"] = round(float(row.get("TOV_POSS_PCT", 0)), 4)
+
+    except Exception as exc:
+        logger.warning("NBA API synergy defense fetch failed: %s", exc)
+        if cache_path.exists():
+            with open(cache_path) as f:
+                return json.load(f)
+        return {}
+
+    with open(cache_path, "w") as f:
+        json.dump(data, f, indent=2)
+    logger.info("Fetched synergy defense for %d teams", len(data))
+    return data
+
+
+def fetch_nba_synergy_player(
+    season: str = "2025-26",
+    cache_ttl_hours: int = 12,
+) -> dict[str, dict]:
+    """Fetch player offensive synergy play type data from NBA.com.
+
+    Returns how each player generates offense by play type: spot-up,
+    isolation, P&R ball handler, off-screen, transition — with PPP, FG%,
+    possessions share, and efficiency.
+    """
+    cache_path = Path(f"/tmp/nba_synergy_player_{season}.json")
+
+    if cache_path.exists():
+        mtime = datetime.fromtimestamp(cache_path.stat().st_mtime)
+        age_hours = (datetime.now() - mtime).total_seconds() / 3600
+        if age_hours < cache_ttl_hours:
+            with open(cache_path) as f:
+                data = json.load(f)
+            logger.info(
+                "Loaded cached synergy player (%d players, %.1fh old)",
+                len(data), age_hours,
+            )
+            return data
+
+    try:
+        from nba_api.stats.endpoints import synergyplaytypes
+        import time as _time
+
+        data: dict[str, dict] = {}
+        play_types = [
+            "Spotup", "Isolation", "PRBallHandler", "PRRollman",
+            "OffScreen", "Transition", "Handoff", "Cut",
+        ]
+
+        for pt in play_types:
+            _time.sleep(0.6)
+            r = synergyplaytypes.SynergyPlayTypes(
+                per_mode_simple="PerGame",
+                play_type_nullable=pt,
+                type_grouping_nullable="offensive",
+                season=season,
+                season_type_all_star="Regular Season",
+                player_or_team_abbreviation="P",
+            )
+            df = r.get_data_frames()[0]
+            pt_key = pt.lower()
+
+            for _, row in df.iterrows():
+                name = str(row.get("PLAYER_NAME", ""))
+                key = name.lower()
+                if not key:
+                    continue
+                data.setdefault(key, {"name": name})
+                data[key][f"off_{pt_key}_ppp"] = round(float(row.get("PPP", 0)), 3)
+                data[key][f"off_{pt_key}_fg_pct"] = round(float(row.get("FG_PCT", 0)), 4)
+                data[key][f"off_{pt_key}_efg"] = round(float(row.get("EFG_PCT", 0)), 4)
+                data[key][f"off_{pt_key}_poss"] = round(float(row.get("POSS", 0)), 1)
+                data[key][f"off_{pt_key}_freq"] = round(float(row.get("POSS_PCT", 0)), 4)
+                data[key][f"off_{pt_key}_score_pct"] = round(float(row.get("SCORE_POSS_PCT", 0)), 4)
+
+    except Exception as exc:
+        logger.warning("NBA API synergy player fetch failed: %s", exc)
+        if cache_path.exists():
+            with open(cache_path) as f:
+                return json.load(f)
+        return {}
+
+    with open(cache_path, "w") as f:
+        json.dump(data, f, indent=2)
+    logger.info("Fetched synergy player data for %d players", len(data))
+    return data
+
+
+def fetch_nba_team_hustle(
+    season: str = "2025-26",
+    cache_ttl_hours: int = 12,
+) -> dict[str, dict]:
+    """Fetch team hustle stats (contested shots, deflections, etc.)."""
+    cache_path = Path(f"/tmp/nba_team_hustle_{season}.json")
+
+    if cache_path.exists():
+        mtime = datetime.fromtimestamp(cache_path.stat().st_mtime)
+        age_hours = (datetime.now() - mtime).total_seconds() / 3600
+        if age_hours < cache_ttl_hours:
+            with open(cache_path) as f:
+                return json.load(f)
+
+    try:
+        from nba_api.stats.endpoints import leaguehustlestatsteam
+        import time as _time
+
+        _time.sleep(0.6)
+        r = leaguehustlestatsteam.LeagueHustleStatsTeam(
+            per_mode_time="PerGame",
+            season=season,
+            season_type_all_star="Regular Season",
+        )
+        df = r.get_data_frames()[0]
+    except Exception as exc:
+        logger.warning("NBA API team hustle fetch failed: %s", exc)
+        if cache_path.exists():
+            with open(cache_path) as f:
+                return json.load(f)
+        return {}
+
+    data: dict[str, dict] = {}
+    for _, row in df.iterrows():
+        team_id = int(row["TEAM_ID"])
+        bbref = _NBA_ID_TO_BBREF.get(team_id, "")
+        if not bbref:
+            continue
+        data[bbref] = {
+            "contested_shots": round(float(row.get("CONTESTED_SHOTS", 0)), 1),
+            "contested_shots_3pt": round(float(row.get("CONTESTED_SHOTS_3PT", 0)), 1),
+            "contested_shots_2pt": round(float(row.get("CONTESTED_SHOTS_2PT", 0)), 1),
+            "deflections": round(float(row.get("DEFLECTIONS", 0)), 1),
+            "charges_drawn": round(float(row.get("CHARGES_DRAWN", 0)), 2),
+            "loose_balls_recovered": round(float(row.get("LOOSE_BALLS_RECOVERED", 0)), 1),
+            "screen_assists": round(float(row.get("SCREEN_ASSISTS", 0)), 1),
+            "screen_ast_pts": round(float(row.get("SCREEN_AST_PTS", 0)), 1),
+        }
+
+    with open(cache_path, "w") as f:
+        json.dump(data, f, indent=2)
+    logger.info("Fetched team hustle stats for %d teams", len(data))
+    return data
+
+
+def fetch_nba_opp_shot_clock(
+    season: str = "2025-26",
+    cache_ttl_hours: int = 12,
+) -> dict[str, dict]:
+    """Fetch opponent shooting by shot clock range from NBA.com.
+
+    Returns how many 3PA and at what FG3% each team allows by shot clock:
+    early (22-18), normal (18-15, 15-7), and late (7-4, 4-0).
+    """
+    cache_path = Path(f"/tmp/nba_opp_shot_clock_{season}.json")
+
+    if cache_path.exists():
+        mtime = datetime.fromtimestamp(cache_path.stat().st_mtime)
+        age_hours = (datetime.now() - mtime).total_seconds() / 3600
+        if age_hours < cache_ttl_hours:
+            with open(cache_path) as f:
+                data = json.load(f)
+            logger.info(
+                "Loaded cached opp shot clock (%d teams, %.1fh old)",
+                len(data), age_hours,
+            )
+            return data
+
+    try:
+        from nba_api.stats.endpoints import leaguedashoppptshot
+        import time as _time
+
+        data: dict[str, dict] = {}
+        sc_ranges = {
+            "early": "22-18 Very Early",
+            "normal_early": "18-15 Early",
+            "normal": "15-7 Average",
+            "late": "4-0 Very Late",
+        }
+
+        for key, sc_range in sc_ranges.items():
+            _time.sleep(0.6)
+            r = leaguedashoppptshot.LeagueDashOppPtShot(
+                per_mode_simple="PerGame", season=season,
+                season_type_all_star="Regular Season",
+                shot_clock_range_nullable=sc_range,
+            )
+            df = r.get_data_frames()[0]
+            for _, row in df.iterrows():
+                team_id = int(row["TEAM_ID"])
+                bbref = _NBA_ID_TO_BBREF.get(team_id, "")
+                if not bbref:
+                    continue
+                data.setdefault(bbref, {})
+                data[bbref][f"sc_{key}_3pa"] = round(float(row["FG3A"]), 2)
+                data[bbref][f"sc_{key}_3pm"] = round(float(row["FG3M"]), 2)
+                fg3_pct = row["FG3_PCT"]
+                data[bbref][f"sc_{key}_3pct"] = round(
+                    float(fg3_pct if fg3_pct and fg3_pct == fg3_pct else 0), 4
+                )
+
+    except Exception as exc:
+        logger.warning("NBA API opp shot clock fetch failed: %s", exc)
+        if cache_path.exists():
+            with open(cache_path) as f:
+                return json.load(f)
+        return {}
+
+    with open(cache_path, "w") as f:
+        json.dump(data, f, indent=2)
+    logger.info("Fetched opp shot clock data for %d teams", len(data))
+    return data
+
+
+def fetch_nba_player_shot_clock(
+    season: str = "2025-26",
+    cache_ttl_hours: int = 12,
+) -> dict[str, dict]:
+    """Fetch player shooting by shot clock range from NBA.com.
+
+    Returns per-player 3PA and FG3% broken down by shot clock:
+    early (22-18), normal (15-7), late (4-0).
+    """
+    cache_path = Path(f"/tmp/nba_player_shot_clock_{season}.json")
+
+    if cache_path.exists():
+        mtime = datetime.fromtimestamp(cache_path.stat().st_mtime)
+        age_hours = (datetime.now() - mtime).total_seconds() / 3600
+        if age_hours < cache_ttl_hours:
+            with open(cache_path) as f:
+                data = json.load(f)
+            logger.info(
+                "Loaded cached player shot clock (%d players, %.1fh old)",
+                len(data), age_hours,
+            )
+            return data
+
+    try:
+        from nba_api.stats.endpoints import leaguedashplayerptshot
+        import time as _time
+
+        data: dict[str, dict] = {}
+        sc_ranges = {
+            "early": "22-18 Very Early",
+            "normal": "15-7 Average",
+            "late": "4-0 Very Late",
+        }
+
+        for key, sc_range in sc_ranges.items():
+            _time.sleep(0.6)
+            r = leaguedashplayerptshot.LeagueDashPlayerPtShot(
+                per_mode_simple="PerGame", season=season,
+                season_type_all_star="Regular Season",
+                shot_clock_range_nullable=sc_range,
+            )
+            df = r.get_data_frames()[0]
+            for _, row in df.iterrows():
+                name = str(row.get("PLAYER_NAME_LAST_FIRST", ""))
+                # Convert "Last, First" to "first last"
+                parts = name.split(", ")
+                if len(parts) == 2:
+                    pkey = f"{parts[1]} {parts[0]}".lower()
+                else:
+                    pkey = name.lower()
+                if not pkey:
+                    continue
+                data.setdefault(pkey, {})
+                data[pkey][f"sc_{key}_3pa"] = round(float(row.get("FG3A", 0)), 2)
+                data[pkey][f"sc_{key}_3pm"] = round(float(row.get("FG3M", 0)), 2)
+                fg3_pct = row.get("FG3_PCT", 0)
+                data[pkey][f"sc_{key}_3pct"] = round(
+                    float(fg3_pct if fg3_pct and fg3_pct == fg3_pct else 0), 4
+                )
+
+    except Exception as exc:
+        logger.warning("NBA API player shot clock fetch failed: %s", exc)
+        if cache_path.exists():
+            with open(cache_path) as f:
+                return json.load(f)
+        return {}
+
+    with open(cache_path, "w") as f:
+        json.dump(data, f, indent=2)
+    logger.info("Fetched player shot clock data for %d players", len(data))
+    return data
+
+
+def fetch_nba_player_advanced(
+    season: str = "2025-26",
+    cache_ttl_hours: int = 12,
+) -> dict[str, dict]:
+    """Fetch player advanced stats from NBA.com.
+
+    Returns per-player: NET_RATING, USG_PCT, AST_PCT, OFF_RATING, DEF_RATING,
+    TS_PCT, EFG_PCT, PACE, PIE — key context for usage and on-court impact.
+    """
+    cache_path = Path(f"/tmp/nba_player_advanced_{season}.json")
+
+    if cache_path.exists():
+        mtime = datetime.fromtimestamp(cache_path.stat().st_mtime)
+        age_hours = (datetime.now() - mtime).total_seconds() / 3600
+        if age_hours < cache_ttl_hours:
+            with open(cache_path) as f:
+                data = json.load(f)
+            logger.info(
+                "Loaded cached player advanced (%d players, %.1fh old)",
+                len(data), age_hours,
+            )
+            return data
+
+    try:
+        from nba_api.stats.endpoints import leaguedashplayerstats
+        import time as _time
+
+        _time.sleep(0.6)
+        r = leaguedashplayerstats.LeagueDashPlayerStats(
+            measure_type_detailed_defense="Advanced",
+            per_mode_detailed="PerGame",
+            season=season,
+            season_type_all_star="Regular Season",
+        )
+        df = r.get_data_frames()[0]
+    except Exception as exc:
+        logger.warning("NBA API player advanced fetch failed: %s", exc)
+        if cache_path.exists():
+            with open(cache_path) as f:
+                return json.load(f)
+        return {}
+
+    data: dict[str, dict] = {}
+    for _, row in df.iterrows():
+        name = str(row.get("PLAYER_NAME", ""))
+        pkey = name.lower()
+        if not pkey:
+            continue
+        data[pkey] = {
+            "net_rating": round(float(row.get("NET_RATING", 0)), 1),
+            "off_rating": round(float(row.get("OFF_RATING", 0)), 1),
+            "def_rating": round(float(row.get("DEF_RATING", 0)), 1),
+            "usg_pct": round(float(row.get("USG_PCT", 0)), 3),
+            "ast_pct": round(float(row.get("AST_PCT", 0)), 3),
+            "ast_ratio": round(float(row.get("AST_RATIO", 0)), 1),
+            "ast_to": round(float(row.get("AST_TO", 0)), 2),
+            "ts_pct": round(float(row.get("TS_PCT", 0)), 3),
+            "efg_pct": round(float(row.get("EFG_PCT", 0)), 3),
+            "pace": round(float(row.get("PACE", 0)), 1),
+            "pie": round(float(row.get("PIE", 0)), 3),
+            "poss": round(float(row.get("POSS", 0)), 0),
+        }
+
+    with open(cache_path, "w") as f:
+        json.dump(data, f, indent=2)
+    logger.info("Fetched player advanced stats for %d players", len(data))
+    return data
+
+
 def fetch_nba_player_shooting(
     season: str = "2025-26",
     cache_ttl_hours: int = 12,
@@ -1371,6 +1784,80 @@ class ThreePMPredictor:
 
         shrunk_pct = float(np.clip(shrunk_pct, 0.15, 0.55))
 
+        # ── Synergy matchup quality: player play type × opp defense ──
+        # Compute a weighted matchup quality score across play types.
+        # For 3PM-relevant play types (spotup, offscreen, P&R, handoff),
+        # cross the player's frequency with the opponent's defensive PPP.
+        # Higher opp PPP allowed = weaker defense = boost for player.
+        _LEAGUE_AVG_PPP = {
+            "spotup": 1.03, "isolation": 0.89, "prballhandler": 0.87,
+            "offscreen": 1.01, "transition": 1.12, "handoff": 0.95,
+        }
+        # Play types most relevant to 3PM (with weight)
+        _3PM_PLAY_TYPE_WEIGHTS = {
+            "spotup": 0.40, "offscreen": 0.25, "prballhandler": 0.15,
+            "handoff": 0.10, "transition": 0.10,
+        }
+        synergy_adj = 0.0
+        synergy_weight_sum = 0.0
+        for pt, pt_weight in _3PM_PLAY_TYPE_WEIGHTS.items():
+            player_freq = ctx.get(f"player_off_{pt}_freq", 0.0)
+            opp_def_ppp = ctx.get(f"opp_def_{pt}_ppp", 0.0)
+            avg_ppp = _LEAGUE_AVG_PPP.get(pt, 1.0)
+            if player_freq > 0 and opp_def_ppp > 0:
+                # How much better/worse is this opp vs average at defending this play type
+                ppp_ratio = opp_def_ppp / avg_ppp
+                # Weight by both the play type importance and the player's usage of it
+                w = pt_weight * player_freq
+                synergy_adj += w * (ppp_ratio - 1.0)
+                synergy_weight_sum += w
+
+        if synergy_weight_sum > 0:
+            # Normalize and apply as a multiplicative adjustment
+            synergy_adj /= synergy_weight_sum
+            # Clip to +/- 5% — synergy is a secondary signal
+            synergy_adj = np.clip(synergy_adj, -0.05, 0.05)
+            shrunk_rate *= (1.0 + synergy_adj)
+
+        # ── Hustle/contest adjustment: opponent 3PT contest rate ─────
+        # Teams that contest more 3s tend to lower FG3% against
+        opp_contested_3pt = ctx.get("opp_contested_shots_3pt", 0.0)
+        if opp_contested_3pt > 0:
+            # League average is roughly 7-8 contested 3s per game
+            contest_ratio = opp_contested_3pt / 7.5
+            # More contests = lower make rate (up to -3%)
+            contest_adj = np.clip((contest_ratio - 1.0) * -0.03, -0.03, 0.03)
+            shrunk_pct += contest_adj
+            shrunk_pct = float(np.clip(shrunk_pct, 0.15, 0.55))
+
+        # ── Shot clock matchup: player tempo × opp shot clock defense ─
+        # Players who shoot early in the clock face different defense than
+        # late-clock shooters. Cross player's shot clock distribution with
+        # opponent's shot clock FG3% allowed.
+        p_sc_early = ctx.get("player_sc_early_3pa", 0.0)
+        p_sc_normal = ctx.get("player_sc_normal_3pa", 0.0)
+        p_sc_late = ctx.get("player_sc_late_3pa", 0.0)
+        total_sc = p_sc_early + p_sc_normal + p_sc_late
+        if total_sc > 0:
+            early_share = p_sc_early / total_sc
+            normal_share = p_sc_normal / total_sc
+            late_share = p_sc_late / total_sc
+            opp_sc_early = ctx.get("opp_sc_early_3pct", 0.0)
+            opp_sc_normal_3pct = ctx.get("opp_sc_normal_3pa", 0.0)  # use 3pa as proxy
+            opp_sc_late = ctx.get("opp_sc_late_3pct", 0.0)
+            # If opponent allows high late-clock FG3% and player shoots late,
+            # that's a boost. Weight by player's shot clock distribution.
+            if opp_sc_early > 0 and opp_sc_late > 0:
+                weighted_opp_sc_pct = (
+                    early_share * opp_sc_early
+                    + normal_share * LEAGUE_3PT_PCT
+                    + late_share * opp_sc_late
+                )
+                sc_diff = weighted_opp_sc_pct - LEAGUE_3PT_PCT
+                sc_adj = np.clip(sc_diff * 0.3, -0.02, 0.02)
+                shrunk_pct += sc_adj
+                shrunk_pct = float(np.clip(shrunk_pct, 0.15, 0.55))
+
         # ── Monte Carlo ──────────────────────────────────────────────
         rng = np.random.default_rng()
         log_mu = np.log(max(min_mean, 1)) - 0.5 * (min_std / max(min_mean, 1)) ** 2
@@ -1473,6 +1960,44 @@ class AssistsPredictor:
             if game_total > 0:
                 pace_ratio = np.clip(game_total / 228.0, 0.90, 1.10)
                 shrunk_rate *= pace_ratio
+
+        # ── Synergy matchup: assists-relevant play types ─────────────
+        # P&R ball handlers and isolation players generate assists differently
+        # vs opponents who are weak/strong at defending those play types.
+        # Weak P&R defense → more drive-and-kick assists for ball handlers.
+        _AST_LEAGUE_AVG_PPP = {
+            "prballhandler": 0.87, "isolation": 0.89, "transition": 1.12,
+            "handoff": 0.95, "cut": 1.10,
+        }
+        _AST_PLAY_TYPE_WEIGHTS = {
+            "prballhandler": 0.35, "isolation": 0.20, "transition": 0.20,
+            "handoff": 0.15, "cut": 0.10,
+        }
+        ast_synergy_adj = 0.0
+        ast_syn_weight_sum = 0.0
+        for pt, pt_w in _AST_PLAY_TYPE_WEIGHTS.items():
+            p_freq = ctx.get(f"player_off_{pt}_freq", 0.0)
+            opp_ppp = ctx.get(f"opp_def_{pt}_ppp", 0.0)
+            avg_ppp = _AST_LEAGUE_AVG_PPP.get(pt, 1.0)
+            if p_freq > 0 and opp_ppp > 0:
+                ratio = opp_ppp / avg_ppp
+                w = pt_w * p_freq
+                ast_synergy_adj += w * (ratio - 1.0)
+                ast_syn_weight_sum += w
+
+        if ast_syn_weight_sum > 0:
+            ast_synergy_adj /= ast_syn_weight_sum
+            ast_synergy_adj = np.clip(ast_synergy_adj, -0.05, 0.05)
+            shrunk_rate *= (1.0 + ast_synergy_adj)
+
+        # ── Deflections adjustment: high-deflection teams disrupt passing ─
+        opp_deflections = ctx.get("opp_deflections", 0.0)
+        if opp_deflections > 0:
+            # League average ~15 deflections per game
+            defl_ratio = opp_deflections / 15.0
+            # More deflections = slightly fewer assists (up to -3%)
+            defl_adj = np.clip((defl_ratio - 1.0) * -0.03, -0.03, 0.03)
+            shrunk_rate *= (1.0 + defl_adj)
 
         # ── Overdispersion estimate ──────────────────────────────────
         if len(games) >= 5 and np.mean(assists) > 0:
@@ -1756,7 +2281,13 @@ def predict_live(
     opp_general = fetch_nba_opponent_general()
     team_advanced = fetch_nba_team_advanced()
     opp_tracking = fetch_nba_opp_tracking_shooting()
+    synergy_defense = fetch_nba_synergy_defense()
+    team_hustle = fetch_nba_team_hustle()
+    opp_shot_clock = fetch_nba_opp_shot_clock()
     player_shooting = fetch_nba_player_shooting()
+    synergy_player = fetch_nba_synergy_player()
+    player_shot_clock = fetch_nba_player_shot_clock()
+    player_advanced = fetch_nba_player_advanced()
 
     # Compute league averages from the real data for ratio normalization
     if opp_shooting:
@@ -1803,11 +2334,39 @@ def predict_live(
         player_key = prop.player_name.lower()
         player_prof = player_shooting.get(player_key, {})
         if not player_prof:
-            # Try matching against player shooting keys
             for ps_key in player_shooting:
                 if _names_match(player_key, ps_key):
                     player_prof = player_shooting[ps_key]
                     break
+
+        # Player synergy profile (try exact match then fuzzy)
+        player_syn = synergy_player.get(player_key, {})
+        if not player_syn:
+            for sp_key in synergy_player:
+                if _names_match(player_key, sp_key):
+                    player_syn = synergy_player[sp_key]
+                    break
+
+        # Player shot clock profile
+        player_sc = player_shot_clock.get(player_key, {})
+        if not player_sc:
+            for psc_key in player_shot_clock:
+                if _names_match(player_key, psc_key):
+                    player_sc = player_shot_clock[psc_key]
+                    break
+
+        # Player advanced stats (net rating, usage, etc.)
+        player_adv = player_advanced.get(player_key, {})
+        if not player_adv:
+            for pa_key in player_advanced:
+                if _names_match(player_key, pa_key):
+                    player_adv = player_advanced[pa_key]
+                    break
+
+        # Opponent synergy defense & hustle & shot clock
+        opp_syn = synergy_defense.get(opp_team, {})
+        opp_hustle = team_hustle.get(opp_team, {})
+        opp_sc = opp_shot_clock.get(opp_team, {})
 
         game_context = {
             # Game-level
@@ -1867,6 +2426,78 @@ def predict_live(
             "sample_avg_ast": league_avg_ast,
             "sample_avg_wide_open_3pa": avg_wide_open_3pa,
             "sample_avg_catch_shoot_3pa": avg_catch_shoot_3pa,
+
+            # Opponent synergy defense (PPP allowed by play type)
+            "opp_def_spotup_ppp": opp_syn.get("def_spotup_ppp", 0.0),
+            "opp_def_spotup_efg": opp_syn.get("def_spotup_efg", 0.0),
+            "opp_def_spotup_freq": opp_syn.get("def_spotup_freq", 0.0),
+            "opp_def_isolation_ppp": opp_syn.get("def_isolation_ppp", 0.0),
+            "opp_def_isolation_efg": opp_syn.get("def_isolation_efg", 0.0),
+            "opp_def_prballhandler_ppp": opp_syn.get("def_prballhandler_ppp", 0.0),
+            "opp_def_prballhandler_efg": opp_syn.get("def_prballhandler_efg", 0.0),
+            "opp_def_prrollman_ppp": opp_syn.get("def_prrollman_ppp", 0.0),
+            "opp_def_offscreen_ppp": opp_syn.get("def_offscreen_ppp", 0.0),
+            "opp_def_offscreen_efg": opp_syn.get("def_offscreen_efg", 0.0),
+            "opp_def_transition_ppp": opp_syn.get("def_transition_ppp", 0.0),
+            "opp_def_handoff_ppp": opp_syn.get("def_handoff_ppp", 0.0),
+            "opp_def_cut_ppp": opp_syn.get("def_cut_ppp", 0.0),
+
+            # Player offensive synergy (play type distribution & efficiency)
+            "player_off_spotup_freq": player_syn.get("off_spotup_freq", 0.0),
+            "player_off_spotup_ppp": player_syn.get("off_spotup_ppp", 0.0),
+            "player_off_spotup_poss": player_syn.get("off_spotup_poss", 0.0),
+            "player_off_isolation_freq": player_syn.get("off_isolation_freq", 0.0),
+            "player_off_isolation_ppp": player_syn.get("off_isolation_ppp", 0.0),
+            "player_off_prballhandler_freq": player_syn.get("off_prballhandler_freq", 0.0),
+            "player_off_prballhandler_ppp": player_syn.get("off_prballhandler_ppp", 0.0),
+            "player_off_prrollman_freq": player_syn.get("off_prrollman_freq", 0.0),
+            "player_off_offscreen_freq": player_syn.get("off_offscreen_freq", 0.0),
+            "player_off_offscreen_ppp": player_syn.get("off_offscreen_ppp", 0.0),
+            "player_off_transition_freq": player_syn.get("off_transition_freq", 0.0),
+            "player_off_handoff_freq": player_syn.get("off_handoff_freq", 0.0),
+            "player_off_cut_freq": player_syn.get("off_cut_freq", 0.0),
+
+            # Opponent hustle stats (defensive intensity)
+            "opp_contested_shots_3pt": opp_hustle.get("contested_shots_3pt", 0.0),
+            "opp_contested_shots": opp_hustle.get("contested_shots", 0.0),
+            "opp_deflections": opp_hustle.get("deflections", 0.0),
+
+            # Opponent shot clock defense (3PA allowed by clock phase)
+            "opp_sc_early_3pa": opp_sc.get("sc_early_3pa", 0.0),
+            "opp_sc_early_3pct": opp_sc.get("sc_early_3pct", 0.0),
+            "opp_sc_normal_early_3pa": opp_sc.get("sc_normal_early_3pa", 0.0),
+            "opp_sc_normal_3pa": opp_sc.get("sc_normal_3pa", 0.0),
+            "opp_sc_late_3pa": opp_sc.get("sc_late_3pa", 0.0),
+            "opp_sc_late_3pct": opp_sc.get("sc_late_3pct", 0.0),
+
+            # Player passing/playmaking profile (for assists model)
+            "player_passes_made": player_prof.get("passes_made", 0.0),
+            "player_potential_ast": player_prof.get("potential_ast", 0.0),
+            "player_ast_pts_created": player_prof.get("ast_pts_created", 0.0),
+            "player_secondary_ast": player_prof.get("secondary_ast", 0.0),
+            "player_touches": player_prof.get("touches", 0.0),
+            "player_time_of_poss": player_prof.get("time_of_poss", 0.0),
+            "player_drives": player_prof.get("drives", 0.0),
+            "player_drive_ast": player_prof.get("drive_ast", 0.0),
+            "player_drive_passes": player_prof.get("drive_passes", 0.0),
+
+            # Player shot clock splits (3PA/3P% by clock phase)
+            "player_sc_early_3pa": player_sc.get("sc_early_3pa", 0.0),
+            "player_sc_early_3pct": player_sc.get("sc_early_3pct", 0.0),
+            "player_sc_normal_3pa": player_sc.get("sc_normal_3pa", 0.0),
+            "player_sc_normal_3pct": player_sc.get("sc_normal_3pct", 0.0),
+            "player_sc_late_3pa": player_sc.get("sc_late_3pa", 0.0),
+            "player_sc_late_3pct": player_sc.get("sc_late_3pct", 0.0),
+
+            # Player advanced (on-court impact, usage context)
+            "player_net_rating": player_adv.get("net_rating", 0.0),
+            "player_off_rating": player_adv.get("off_rating", 0.0),
+            "player_usg_pct": player_adv.get("usg_pct", 0.0),
+            "player_ast_pct": player_adv.get("ast_pct", 0.0),
+            "player_ast_ratio": player_adv.get("ast_ratio", 0.0),
+            "player_ts_pct": player_adv.get("ts_pct", 0.0),
+            "player_efg_pct": player_adv.get("efg_pct", 0.0),
+            "player_pie": player_adv.get("pie", 0.0),
         }
 
         # Get the right predictor for this stat type
