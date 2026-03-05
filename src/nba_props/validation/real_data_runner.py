@@ -1,9 +1,13 @@
 """Run the full validation pack against real NBA data only.
 
 Data sources (all real, zero synthetic):
-  1. Basketball-Reference: player game logs (minutes, 3PA, 3PM, etc.)
-  2. SportsGameOdds API:   historical 3PM props with multi-book odds & results
-  3. The Odds API:         live 3PM props for current/upcoming games
+  1. Basketball-Reference: player game logs (minutes, 3PA, 3PM, assists, etc.)
+  2. SportsGameOdds API:   historical props with multi-book odds & results
+  3. The Odds API:         live props for current/upcoming games
+
+Supported stat types:
+  - fg3m: Three-pointers made (3PM)
+  - assists: Player assists
 
 No fake odds, no synthetic lines, no simulated results.
 """
@@ -45,6 +49,38 @@ BBREF_HEADERS = {
 }
 
 LEAGUE_3PT_PCT = 0.363
+LEAGUE_AST_PER_36 = 4.5  # League-average assists per 36 minutes
+
+# Stat type constants
+STAT_FG3M = "fg3m"
+STAT_ASSISTS = "assists"
+SUPPORTED_STATS = (STAT_FG3M, STAT_ASSISTS)
+
+# Mapping from stat type to SGO odds key prefix and market name suffix
+SGO_STAT_CONFIG = {
+    STAT_FG3M: {
+        "key_prefix": "threePointersMade-",
+        "key_suffix": "-game-ou-over",
+        "market_name_strip": " Three Pointers Made Over/Under",
+    },
+    STAT_ASSISTS: {
+        "key_prefix": "assists-",
+        "key_suffix": "-game-ou-over",
+        "market_name_strip": " Assists Over/Under",
+    },
+}
+
+# Mapping from stat type to The Odds API market key
+ODDS_API_MARKET_MAP = {
+    STAT_FG3M: "player_threes",
+    STAT_ASSISTS: "player_assists",
+}
+
+# Mapping from stat type to BBRef game log field
+BBREF_STAT_FIELD = {
+    STAT_FG3M: "fg3",
+    STAT_ASSISTS: "ast",
+}
 
 
 # ── Data classes ─────────────────────────────────────────────────────────────
@@ -52,7 +88,7 @@ LEAGUE_3PT_PCT = 0.363
 
 @dataclass
 class PropRecord:
-    """A single 3PM over/under prop with actual result — all fields real."""
+    """A single over/under prop with actual result — all fields real."""
 
     source: str  # "sgo", "odds_api"
     event_id: str
@@ -66,10 +102,16 @@ class PropRecord:
     odds_under: int
     closing_odds_over: int
     closing_odds_under: int
-    actual_3pm: int  # -1 if game hasn't happened
+    actual_stat: int  # -1 if game hasn't happened
+    stat_type: str = STAT_FG3M  # "fg3m" or "assists"
     books: dict = field(default_factory=dict)
     spread: float = 0.0
     total: float = 0.0
+
+    @property
+    def actual_3pm(self) -> int:
+        """Backward compatibility alias."""
+        return self.actual_stat
 
 
 # ── Odds math ────────────────────────────────────────────────────────────────
@@ -156,8 +198,11 @@ def fetch_sgo_events(
     return all_events
 
 
-def extract_sgo_props(events: list[dict]) -> list[PropRecord]:
-    """Extract real 3PM props from SGO event data."""
+def extract_sgo_props(
+    events: list[dict],
+    stat_types: tuple[str, ...] = (STAT_FG3M,),
+) -> list[PropRecord]:
+    """Extract real props from SGO event data for specified stat types."""
     props = []
     for ev in events:
         odds = ev.get("odds", {})
@@ -173,63 +218,74 @@ def extract_sgo_props(events: list[dict]) -> list[PropRecord]:
             except (ValueError, TypeError):
                 pass
 
-        for key in odds:
-            if not (key.startswith("threePointersMade-") and key.endswith("-game-ou-over")):
-                continue
-            under_key = key.replace("-ou-over", "-ou-under")
-            if under_key not in odds:
+        for stat_type in stat_types:
+            cfg = SGO_STAT_CONFIG.get(stat_type)
+            if not cfg:
                 continue
 
-            over_odd = odds[key]
-            under_odd = odds[under_key]
-            score = over_odd.get("score")
-            if score is None:
-                continue
+            for key in odds:
+                if not (key.startswith(cfg["key_prefix"]) and key.endswith(cfg["key_suffix"])):
+                    continue
+                under_key = key.replace("-ou-over", "-ou-under")
+                if under_key not in odds:
+                    continue
 
-            player_name = over_odd.get("marketName", "").replace(
-                " Three Pointers Made Over/Under", ""
-            )
-            try:
-                line = float(over_odd.get("bookOverUnder", "0") or "0")
-                odds_over = int(over_odd.get("bookOdds", "+100"))
-                odds_under = int(under_odd.get("bookOdds", "+100"))
-                close_over = int(over_odd.get("closeBookOdds", str(odds_over)))
-                close_under = int(under_odd.get("closeBookOdds", str(odds_under)))
-            except (ValueError, TypeError):
-                continue
+                over_odd = odds[key]
+                under_odd = odds[under_key]
+                score = over_odd.get("score")
+                if score is None:
+                    continue
 
-            books = {}
-            for bk_name, bk_data in over_odd.get("byBookmaker", {}).items():
+                player_name = over_odd.get("marketName", "").replace(
+                    cfg["market_name_strip"], ""
+                )
                 try:
-                    books[bk_name] = {
-                        "odds": int(bk_data.get("odds", "+100")),
-                        "line": float(bk_data.get("overUnder", str(line))),
-                    }
+                    line = float(over_odd.get("bookOverUnder", "0") or "0")
+                    odds_over = int(over_odd.get("bookOdds", "+100"))
+                    odds_under = int(under_odd.get("bookOdds", "+100"))
+                    close_over = int(over_odd.get("closeBookOdds", str(odds_over)))
+                    close_under = int(under_odd.get("closeBookOdds", str(odds_under)))
                 except (ValueError, TypeError):
-                    pass
+                    continue
 
-            props.append(PropRecord(
-                source="sgo",
-                event_id=ev["eventID"],
-                game_date=game_date,
-                player_name=player_name,
-                team="", opp="", home=False,
-                line=line,
-                odds_over=odds_over, odds_under=odds_under,
-                closing_odds_over=close_over, closing_odds_under=close_under,
-                actual_3pm=int(score),
-                books=books, spread=spread,
-            ))
+                books = {}
+                for bk_name, bk_data in over_odd.get("byBookmaker", {}).items():
+                    try:
+                        books[bk_name] = {
+                            "odds": int(bk_data.get("odds", "+100")),
+                            "line": float(bk_data.get("overUnder", str(line))),
+                        }
+                    except (ValueError, TypeError):
+                        pass
 
-    logger.info("Extracted %d real 3PM props from SGO", len(props))
+                props.append(PropRecord(
+                    source="sgo",
+                    event_id=ev["eventID"],
+                    game_date=game_date,
+                    player_name=player_name,
+                    team="", opp="", home=False,
+                    line=line,
+                    odds_over=odds_over, odds_under=odds_under,
+                    closing_odds_over=close_over, closing_odds_under=close_under,
+                    actual_stat=int(score),
+                    stat_type=stat_type,
+                    books=books, spread=spread,
+                ))
+
+    for st in stat_types:
+        count = sum(1 for p in props if p.stat_type == st)
+        logger.info("Extracted %d real %s props from SGO", count, st)
     return props
 
 
 # ── The Odds API fetcher ─────────────────────────────────────────────────────
 
 
-def fetch_odds_api_live_props(api_key: str = ODDS_API_KEY) -> list[PropRecord]:
-    """Fetch live 3PM props for upcoming games from The Odds API."""
+def fetch_odds_api_live_props(
+    api_key: str = ODDS_API_KEY,
+    stat_types: tuple[str, ...] = (STAT_FG3M,),
+) -> list[PropRecord]:
+    """Fetch live props for upcoming games from The Odds API."""
     resp = requests.get(
         f"{ODDS_API_BASE}/sports/basketball_nba/events",
         params={"apiKey": api_key}, timeout=15,
@@ -238,6 +294,13 @@ def fetch_odds_api_live_props(api_key: str = ODDS_API_KEY) -> list[PropRecord]:
     events = resp.json()
     remaining = resp.headers.get("x-requests-remaining", "?")
     logger.info("Odds API: %d upcoming events (%s requests remaining)", len(events), remaining)
+
+    # Build comma-separated markets string for all requested stat types
+    markets = ",".join(
+        ODDS_API_MARKET_MAP[st] for st in stat_types if st in ODDS_API_MARKET_MAP
+    )
+    if not markets:
+        return []
 
     props = []
     for ev in events:
@@ -250,7 +313,7 @@ def fetch_odds_api_live_props(api_key: str = ODDS_API_KEY) -> list[PropRecord]:
             f"{ODDS_API_BASE}/sports/basketball_nba/events/{eid}/odds",
             params={
                 "apiKey": api_key, "regions": "us",
-                "markets": "player_threes", "oddsFormat": "american",
+                "markets": markets, "oddsFormat": "american",
             },
             timeout=15,
         )
@@ -259,20 +322,22 @@ def fetch_odds_api_live_props(api_key: str = ODDS_API_KEY) -> list[PropRecord]:
 
         ev_data = resp2.json()
 
-        # Aggregate across books — group by (player, line)
-        player_lines: dict[tuple[str, float], dict] = {}
+        # Aggregate across books — group by (market_key, player, line)
+        player_lines: dict[tuple[str, str, float], dict] = {}
         for bk in ev_data.get("bookmakers", []):
             bk_key = bk["key"]
             for mkt in bk.get("markets", []):
+                market_key = mkt.get("key", "")
                 for outcome in mkt.get("outcomes", []):
                     player = outcome.get("description", "")
                     side = outcome.get("name", "").lower()
                     line = float(outcome.get("point", 0))
                     price = int(outcome.get("price", 100))
 
-                    key = (player, line)
+                    key = (market_key, player, line)
                     if key not in player_lines:
                         player_lines[key] = {
+                            "market_key": market_key,
                             "player": player, "line": line,
                             "odds_over": 0, "odds_under": 0,
                             "books": {},
@@ -285,8 +350,12 @@ def fetch_odds_api_live_props(api_key: str = ODDS_API_KEY) -> list[PropRecord]:
                         player_lines[key]["odds_under"] = price
                         player_lines[key]["books"].setdefault(bk_key, {})["under"] = price
 
-        for (player, line), data in player_lines.items():
+        # Reverse lookup: Odds API market key -> stat type
+        market_to_stat = {v: k for k, v in ODDS_API_MARKET_MAP.items()}
+
+        for (market_key, player, line), data in player_lines.items():
             if data["odds_over"] and data["odds_under"]:
+                stat_type = market_to_stat.get(market_key, STAT_FG3M)
                 props.append(PropRecord(
                     source="odds_api",
                     event_id=eid,
@@ -299,11 +368,14 @@ def fetch_odds_api_live_props(api_key: str = ODDS_API_KEY) -> list[PropRecord]:
                     odds_under=data["odds_under"],
                     closing_odds_over=data["odds_over"],  # live = current
                     closing_odds_under=data["odds_under"],
-                    actual_3pm=-1,  # game hasn't happened
+                    actual_stat=-1,  # game hasn't happened
+                    stat_type=stat_type,
                     books=data["books"],
                 ))
 
-    logger.info("Fetched %d live 3PM props from Odds API", len(props))
+    for st in stat_types:
+        count = sum(1 for p in props if p.stat_type == st)
+        logger.info("Fetched %d live %s props from Odds API", count, st)
     return props
 
 
@@ -408,8 +480,8 @@ class ThreePMPredictor:
 
     def predict(self, recent_games: list[dict], line: float, n_sims: int = 25000) -> dict:
         if len(recent_games) < 5:
-            return {"p_over": 0.5, "mean_3pm": line, "confidence": "low",
-                    "pred_minutes": 0, "pred_3pa_per36": 0, "pred_fg3_pct": 0}
+            return {"p_over": 0.5, "mean_stat": line, "confidence": "low",
+                    "pred_minutes": 0, "pred_rate_per36": 0, "pred_make_pct": 0}
 
         games = recent_games[-self.window:]
         minutes = np.array([g["mp"] for g in games])
@@ -447,14 +519,107 @@ class ThreePMPredictor:
         return {
             "p_over": float(np.mean(sim_3pm > line)),
             "p_under": float(np.mean(sim_3pm <= line)),
+            "mean_stat": float(np.mean(sim_3pm)),
             "mean_3pm": float(np.mean(sim_3pm)),
-            "std_3pm": float(np.std(sim_3pm)),
+            "std_stat": float(np.std(sim_3pm)),
             "pred_minutes": float(min_mean),
+            "pred_rate_per36": float(shrunk_rate),
             "pred_3pa_per36": float(shrunk_rate),
+            "pred_make_pct": float(shrunk_pct),
             "pred_fg3_pct": float(shrunk_pct),
             "n_games_used": len(games),
             "confidence": "high" if len(games) >= 10 else "medium",
         }
+
+
+# ── Model: Empirical Bayes Assists predictor ──────────────────────────────────
+
+
+class AssistsPredictor:
+    """Monte Carlo assists predictor with empirical Bayes shrinkage.
+
+    Models assists as a Poisson-like count scaled by minutes, with
+    Bayesian shrinkage toward the league-average rate.
+    """
+
+    def __init__(self, window: int = 15, prior_strength: int = 20):
+        self.window = window
+        self.prior_strength = prior_strength
+
+    def predict(self, recent_games: list[dict], line: float, n_sims: int = 25000) -> dict:
+        if len(recent_games) < 5:
+            return {"p_over": 0.5, "mean_stat": line, "confidence": "low",
+                    "pred_minutes": 0, "pred_rate_per36": 0, "pred_make_pct": 0}
+
+        games = recent_games[-self.window:]
+        minutes = np.array([g["mp"] for g in games])
+        assists = np.array([g["ast"] for g in games], dtype=float)
+
+        # Minutes (log-normal)
+        min_mean = np.mean(minutes)
+        min_std = max(np.std(minutes), 1.0)
+
+        # Assists rate per 36 with shrinkage
+        total_min = np.sum(minutes)
+        total_ast = np.sum(assists)
+        raw_rate = total_ast / max(total_min, 1) * 36.0
+        n_eff = total_min / 36.0
+        shrunk_rate = (raw_rate * n_eff + LEAGUE_AST_PER_36 * self.prior_strength) / (n_eff + self.prior_strength)
+
+        # Overdispersion: assists tend to be slightly overdispersed vs Poisson
+        # Estimate dispersion from the data
+        if len(games) >= 5 and np.mean(assists) > 0:
+            var = np.var(assists)
+            mean = np.mean(assists)
+            # Negative binomial dispersion: variance = mean + mean^2/r
+            # r = mean^2 / (var - mean) if var > mean, else use Poisson (large r)
+            if var > mean:
+                dispersion = mean ** 2 / (var - mean)
+                dispersion = max(dispersion, 1.0)
+            else:
+                dispersion = 50.0  # approximately Poisson
+        else:
+            dispersion = 10.0
+
+        # Monte Carlo
+        rng = np.random.default_rng()
+        log_mu = np.log(max(min_mean, 1)) - 0.5 * (min_std / max(min_mean, 1)) ** 2
+        log_sig = np.sqrt(np.log(1 + (min_std / max(min_mean, 1)) ** 2))
+        sim_min = np.clip(rng.lognormal(log_mu, log_sig, n_sims), 0, 48)
+
+        # Scale assists rate by minutes
+        sim_rate = np.maximum(shrunk_rate * sim_min / 36.0, 0.01)
+
+        # Draw from Negative Binomial: n=dispersion, p=dispersion/(dispersion+mu)
+        nb_n = dispersion
+        nb_p = dispersion / (dispersion + sim_rate)
+        nb_p = np.clip(nb_p, 0.001, 0.999)
+        sim_ast = rng.negative_binomial(
+            n=np.full(n_sims, nb_n),
+            p=nb_p,
+        )
+
+        return {
+            "p_over": float(np.mean(sim_ast > line)),
+            "p_under": float(np.mean(sim_ast <= line)),
+            "mean_stat": float(np.mean(sim_ast)),
+            "mean_3pm": float(np.mean(sim_ast)),  # backward compat key
+            "std_stat": float(np.std(sim_ast)),
+            "pred_minutes": float(min_mean),
+            "pred_rate_per36": float(shrunk_rate),
+            "pred_3pa_per36": float(shrunk_rate),  # backward compat key
+            "pred_make_pct": 0.0,  # not applicable for assists
+            "pred_fg3_pct": 0.0,  # backward compat key
+            "n_games_used": len(games),
+            "confidence": "high" if len(games) >= 10 else "medium",
+        }
+
+
+def get_predictor(stat_type: str) -> ThreePMPredictor | AssistsPredictor:
+    """Factory to return the appropriate predictor for a stat type."""
+    if stat_type == STAT_ASSISTS:
+        return AssistsPredictor()
+    return ThreePMPredictor()
 
 
 # ── Name matching ────────────────────────────────────────────────────────────
@@ -492,14 +657,14 @@ class EvalRecord:
     game_date: str
     player_name: str
     line: float
-    actual_3pm: int
+    actual_stat: int
     went_over: bool
 
     model_p_over: float
-    model_mean_3pm: float
+    model_mean_stat: float
     model_pred_minutes: float
-    model_pred_3pa_per36: float
-    model_pred_fg3_pct: float
+    model_pred_rate_per36: float
+    model_pred_make_pct: float
 
     rolling_avg_p_over: float
     book_p_over: float
@@ -509,8 +674,10 @@ class EvalRecord:
     closing_odds_over: int
     closing_odds_under: int
 
+    stat_type: str = STAT_FG3M
+
     actual_minutes: float = 0.0
-    actual_3pa: int = 0
+    actual_attempts: int = 0
     starter: bool = True
 
     edge: float = 0.0
@@ -521,6 +688,27 @@ class EvalRecord:
     clv: float = 0.0
     spread: float = 0.0
 
+    # Backward compatibility aliases
+    @property
+    def actual_3pm(self) -> int:
+        return self.actual_stat
+
+    @property
+    def actual_3pa(self) -> int:
+        return self.actual_attempts
+
+    @property
+    def model_mean_3pm(self) -> float:
+        return self.model_mean_stat
+
+    @property
+    def model_pred_3pa_per36(self) -> float:
+        return self.model_pred_rate_per36
+
+    @property
+    def model_pred_fg3_pct(self) -> float:
+        return self.model_pred_make_pct
+
 
 def evaluate_historical(
     props: list[PropRecord],
@@ -528,7 +716,7 @@ def evaluate_historical(
     min_ev_pct: float = 0.03,
 ) -> list[EvalRecord]:
     """Walk-forward evaluation against real historical props."""
-    predictor = ThreePMPredictor()
+    predictors: dict[str, ThreePMPredictor | AssistsPredictor] = {}
     records: list[EvalRecord] = []
 
     # Index logs by (name_lower, date)
@@ -537,7 +725,7 @@ def evaluate_historical(
         log_index[pname.lower()] = {g["date"]: g for g in logs}
 
     for prop in sorted(props, key=lambda p: p.game_date):
-        if prop.actual_3pm < 0:
+        if prop.actual_stat < 0:
             continue  # skip unsettled
 
         matched = _find_player_logs(prop.player_name, log_index)
@@ -551,16 +739,22 @@ def evaluate_historical(
         if len(train) < 5:
             continue
 
+        # Get the right predictor for this stat type
+        if prop.stat_type not in predictors:
+            predictors[prop.stat_type] = get_predictor(prop.stat_type)
+        predictor = predictors[prop.stat_type]
+
         pred = predictor.predict(train, prop.line)
+        stat_field = BBREF_STAT_FIELD.get(prop.stat_type, "fg3")
 
         # Rolling average baseline (real data)
         recent = train[-15:]
-        ra_over = sum(1 for g in recent if g["fg3"] > prop.line) / len(recent) if recent else 0.5
+        ra_over = sum(1 for g in recent if g[stat_field] > prop.line) / len(recent) if recent else 0.5
 
         # Bookmaker baseline (real odds, no-vig)
         bk_over, _ = remove_vig(prop.odds_over, prop.odds_under)
 
-        went_over = prop.actual_3pm > prop.line
+        went_over = prop.actual_stat > prop.line
 
         # Betting decision using real odds
         edge_over = pred["p_over"] - american_to_implied(prop.odds_over)
@@ -581,26 +775,33 @@ def evaluate_historical(
         elif bet_side == "under":
             clv = american_to_implied(prop.odds_under) - american_to_implied(prop.closing_odds_under)
 
+        # Determine actual attempts field based on stat type
+        if prop.stat_type == STAT_FG3M:
+            actual_attempts = test_game["fg3a"] if test_game else 0
+        else:
+            actual_attempts = 0  # assists don't have an "attempts" analog
+
         records.append(EvalRecord(
             source=prop.source,
             game_date=prop.game_date,
             player_name=prop.player_name,
             line=prop.line,
-            actual_3pm=prop.actual_3pm,
+            actual_stat=prop.actual_stat,
             went_over=went_over,
             model_p_over=pred["p_over"],
-            model_mean_3pm=pred["mean_3pm"],
+            model_mean_stat=pred["mean_stat"],
             model_pred_minutes=pred["pred_minutes"],
-            model_pred_3pa_per36=pred["pred_3pa_per36"],
-            model_pred_fg3_pct=pred["pred_fg3_pct"],
+            model_pred_rate_per36=pred["pred_rate_per36"],
+            model_pred_make_pct=pred["pred_make_pct"],
             rolling_avg_p_over=ra_over,
             book_p_over=bk_over,
             odds_over=prop.odds_over,
             odds_under=prop.odds_under,
             closing_odds_over=prop.closing_odds_over,
             closing_odds_under=prop.closing_odds_under,
+            stat_type=prop.stat_type,
             actual_minutes=test_game["mp"] if test_game else 0,
-            actual_3pa=test_game["fg3a"] if test_game else 0,
+            actual_attempts=actual_attempts,
             starter=test_game["starter"] if test_game else True,
             edge=edge,
             bet_side=bet_side,
@@ -621,7 +822,7 @@ def predict_live(
     min_ev_pct: float = 0.03,
 ) -> list[dict]:
     """Generate predictions for live/upcoming props using real odds."""
-    predictor = ThreePMPredictor()
+    predictors: dict[str, ThreePMPredictor | AssistsPredictor] = {}
     predictions = []
 
     log_index: dict[str, dict[str, dict]] = {}
@@ -637,6 +838,11 @@ def predict_live(
         if len(all_games) < 5:
             continue
 
+        # Get the right predictor for this stat type
+        if prop.stat_type not in predictors:
+            predictors[prop.stat_type] = get_predictor(prop.stat_type)
+        predictor = predictors[prop.stat_type]
+
         pred = predictor.predict(all_games, prop.line)
         bk_over, _ = remove_vig(prop.odds_over, prop.odds_under)
 
@@ -651,15 +857,19 @@ def predict_live(
 
         predictions.append({
             "player": prop.player_name,
+            "stat_type": prop.stat_type,
             "line": prop.line,
             "odds_over": prop.odds_over,
             "odds_under": prop.odds_under,
             "model_p_over": pred["p_over"],
-            "model_mean_3pm": pred["mean_3pm"],
+            "model_mean_stat": pred["mean_stat"],
+            "model_mean_3pm": pred["mean_stat"],  # backward compat
             "book_p_over": bk_over,
             "pred_minutes": pred["pred_minutes"],
-            "pred_3pa_per36": pred["pred_3pa_per36"],
-            "pred_fg3_pct": pred["pred_fg3_pct"],
+            "pred_rate_per36": pred["pred_rate_per36"],
+            "pred_3pa_per36": pred["pred_rate_per36"],  # backward compat
+            "pred_make_pct": pred["pred_make_pct"],
+            "pred_fg3_pct": pred["pred_make_pct"],  # backward compat
             "edge_over": edge_over,
             "edge_under": edge_under,
             "bet_side": bet_side,
@@ -675,13 +885,18 @@ def predict_live(
 # ── Metrics ──────────────────────────────────────────────────────────────────
 
 
-def compute_metrics(records: list[EvalRecord]) -> dict:
+def compute_metrics(records: list[EvalRecord], stat_type: str | None = None) -> dict:
+    if stat_type:
+        records = [r for r in records if r.stat_type == stat_type]
     if not records:
         return {}
 
     bets = [r for r in records if r.bet_side]
     n_total = len(records)
     n_bets = len(bets)
+
+    # Determine the stat label
+    label = stat_type or "all"
 
     model_probs = np.array([r.model_p_over for r in records])
     actuals = np.array([1.0 if r.went_over else 0.0 for r in records])
@@ -696,11 +911,11 @@ def compute_metrics(records: list[EvalRecord]) -> dict:
 
     # Calibration
     cal = {}
-    for lo, hi, label in [(0, .3, "0-30%"), (.3, .4, "30-40%"), (.4, .5, "40-50%"),
+    for lo, hi, label_cal in [(0, .3, "0-30%"), (.3, .4, "30-40%"), (.4, .5, "40-50%"),
                            (.5, .6, "50-60%"), (.6, .7, "60-70%"), (.7, 1, "70-100%")]:
         mask = (model_probs >= lo) & (model_probs < hi)
         if np.sum(mask) > 0:
-            cal[label] = {
+            cal[label_cal] = {
                 "n": int(np.sum(mask)),
                 "pred": float(np.mean(model_probs[mask])),
                 "actual": float(np.mean(actuals[mask])),
@@ -753,33 +968,41 @@ def compute_metrics(records: list[EvalRecord]) -> dict:
     else:
         min_mae = min_mae_s = min_mae_b = 0
 
-    # 3PA MAE
-    with_3pa = [r for r in records if r.actual_3pa > 0]
+    # Attempts MAE (only for fg3m)
+    with_att = [r for r in records if r.actual_attempts > 0]
     tpa_mae = float(np.mean(np.abs(
-        np.array([r.model_pred_3pa_per36 * r.actual_minutes / 36 for r in with_3pa]) -
-        np.array([r.actual_3pa for r in with_3pa])
-    ))) if with_3pa else 0
+        np.array([r.model_pred_rate_per36 * r.actual_minutes / 36 for r in with_att]) -
+        np.array([r.actual_attempts for r in with_att])
+    ))) if with_att else 0
 
-    # 3PM MAE
-    tpm_mae = float(np.mean(np.abs(
-        np.array([r.model_mean_3pm for r in records]) -
-        np.array([r.actual_3pm for r in records])
+    # Stat MAE
+    stat_mae = float(np.mean(np.abs(
+        np.array([r.model_mean_stat for r in records]) -
+        np.array([r.actual_stat for r in records])
     )))
 
     # By line
     line_bkts = {}
-    for label, lo, hi in [("0.5", .4, .6), ("1.5", 1.4, 1.6), ("2.5", 2.4, 2.6), ("3.5+", 3.4, 99)]:
+    # Determine buckets based on stat type
+    if stat_type == STAT_ASSISTS:
+        buckets = [("1.5", 1.4, 1.6), ("2.5", 2.4, 2.6), ("3.5", 3.4, 3.6),
+                   ("4.5", 4.4, 4.6), ("5.5", 5.4, 5.6), ("6.5+", 6.4, 99)]
+    else:
+        buckets = [("0.5", .4, .6), ("1.5", 1.4, 1.6), ("2.5", 2.4, 2.6), ("3.5+", 3.4, 99)]
+
+    for b_label, lo, hi in buckets:
         b_recs = [r for r in records if lo <= r.line <= hi]
         if b_recs:
             b_bets = [r for r in b_recs if r.bet_side]
             b_wins = [r for r in b_bets if r.won]
-            line_bkts[label] = {
+            line_bkts[b_label] = {
                 "n": len(b_recs), "n_bets": len(b_bets),
                 "hit": len(b_wins) / len(b_bets) if b_bets else 0,
                 "roi": sum((r.bet_decimal-1) if r.won else -1 for r in b_bets) / len(b_bets) if b_bets else 0,
             }
 
     return {
+        "stat_type": stat_type or "all",
         "n_predictions": n_total, "n_bets": n_bets,
         "log_loss": log_loss, "brier": brier,
         "calibration": cal, "max_cal_gap": max_gap,
@@ -788,26 +1011,55 @@ def compute_metrics(records: list[EvalRecord]) -> dict:
         "hit_rate": hit_rate, "roi": roi, "pnl": pnl,
         "avg_clv": avg_clv, "avg_edge": avg_edge, "max_drawdown": max_dd,
         "min_mae": min_mae, "min_mae_starters": min_mae_s, "min_mae_bench": min_mae_b,
-        "tpa_mae": tpa_mae, "tpm_mae": tpm_mae,
+        "tpa_mae": tpa_mae, "stat_mae": stat_mae,
+        "tpm_mae": stat_mae,  # backward compat
         "line_buckets": line_bkts,
     }
 
 
 # ── Report ───────────────────────────────────────────────────────────────────
 
+STAT_DISPLAY_NAMES = {
+    STAT_FG3M: "3PM (FG3M)",
+    STAT_ASSISTS: "Assists",
+}
+
 
 def format_report(
-    metrics: dict, records: list[EvalRecord], live_preds: list[dict] | None = None,
+    metrics: dict,
+    records: list[EvalRecord],
+    live_preds: list[dict] | None = None,
+    stat_type: str | None = None,
+    all_metrics: dict[str, dict] | None = None,
 ) -> str:
     L = []
     sep = "=" * 78
     dash = "-" * 78
+
+    stat_label = STAT_DISPLAY_NAMES.get(stat_type, "All Stats") if stat_type else "All Stats"
+    stat_types_in_data = sorted(set(r.stat_type for r in records))
+
     L.append(sep)
-    L.append("  NBA 3PM PROPS ENGINE v1.1 — RC VALIDATION (REAL DATA ONLY)")
+    L.append(f"  NBA PLAYER PROPS ENGINE v2.0 — RC VALIDATION (REAL DATA ONLY)")
+    L.append(f"  Stat Type: {stat_label}")
     L.append(f"  Generated: {datetime.utcnow().isoformat()[:19]}Z")
     L.append(f"  Data: basketball-reference.com game logs + sportsbook odds")
     L.append(sep)
     L.append("")
+
+    # If we have multiple stat types and all_metrics, show combined summary first
+    if all_metrics and len(all_metrics) > 1:
+        L.append("  0. MULTI-STAT OVERVIEW")
+        L.append(dash)
+        L.append(f"  {'Stat Type':<16} {'N':>6} {'Bets':>6} {'LogLoss':>9} {'Brier':>8} {'Hit%':>7} {'ROI':>8} {'CLV':>8}")
+        for st, m in sorted(all_metrics.items()):
+            st_name = STAT_DISPLAY_NAMES.get(st, st)
+            L.append(
+                f"  {st_name:<16} {m['n_predictions']:>6} {m['n_bets']:>6} "
+                f"{m['log_loss']:>9.4f} {m['brier']:>8.4f} "
+                f"{m['hit_rate']:>6.1%} {m['roi']:>+7.1%} {m['avg_clv']:>+7.4f}"
+            )
+        L.append("")
 
     # 1. Summary
     n = metrics["n_predictions"]
@@ -819,12 +1071,14 @@ def format_report(
     L.append("")
 
     # 2. Model accuracy
+    stat_col = "Stat" if stat_type != STAT_FG3M else "3PM"
     L.append("  2. MODEL ACCURACY")
     L.append(dash)
-    L.append(f"  Minutes MAE (starters):  {metrics['min_mae_starters']:.2f}    (target ≤ 2.8)")
-    L.append(f"  Minutes MAE (bench):     {metrics['min_mae_bench']:.2f}    (target ≤ 3.5)")
-    L.append(f"  3PA MAE:                 {metrics['tpa_mae']:.2f}")
-    L.append(f"  3PM MAE:                 {metrics['tpm_mae']:.2f}")
+    L.append(f"  Minutes MAE (starters):  {metrics['min_mae_starters']:.2f}    (target <= 2.8)")
+    L.append(f"  Minutes MAE (bench):     {metrics['min_mae_bench']:.2f}    (target <= 3.5)")
+    if metrics.get("tpa_mae", 0) > 0:
+        L.append(f"  Attempts MAE:            {metrics['tpa_mae']:.2f}")
+    L.append(f"  {stat_col} MAE:                 {metrics['stat_mae']:.2f}")
     L.append("")
 
     # 3. Calibration
@@ -859,22 +1113,24 @@ def format_report(
         L.append("  5. BY LINE")
         L.append(dash)
         L.append(f"  {'Line':<8} {'N':>6} {'Bets':>6} {'Hit%':>8} {'ROI':>9}")
-        for label in ["0.5", "1.5", "2.5", "3.5+"]:
-            if label in lb:
-                b = lb[label]
-                L.append(f"  {label:<8} {b['n']:>6} {b['n_bets']:>6} {b['hit']:>7.1%} {b['roi']:>8.1%}")
+        for b_label in sorted(lb.keys(), key=lambda x: float(x.replace("+", ""))):
+            b = lb[b_label]
+            L.append(f"  {b_label:<8} {b['n']:>6} {b['n_bets']:>6} {b['hit']:>7.1%} {b['roi']:>8.1%}")
         L.append("")
 
     # 6. Paper ledger (last 25)
     bets = [r for r in records if r.bet_side]
+    if stat_type:
+        bets = [r for r in bets if r.stat_type == stat_type]
     if bets:
         L.append("  6. PAPER BET LEDGER (last 25)")
         L.append(dash)
-        L.append(f"  {'Date':<12} {'Player':<22} {'Side':<6} {'Ln':>4} {'Odds':>6} {'3PM':>4} {'W/L':>4} {'Edge':>6} {'CLV':>7}")
+        L.append(f"  {'Date':<12} {'Player':<22} {'Stat':<6} {'Side':<6} {'Ln':>4} {'Odds':>6} {'Act':>4} {'W/L':>4} {'Edge':>6} {'CLV':>7}")
         for r in bets[-25:]:
+            st_short = "3PM" if r.stat_type == STAT_FG3M else "AST"
             L.append(
-                f"  {r.game_date:<12} {r.player_name[:21]:<22} {r.bet_side:<6} "
-                f"{r.line:>4.1f} {r.bet_odds:>+6} {r.actual_3pm:>4} "
+                f"  {r.game_date:<12} {r.player_name[:21]:<22} {st_short:<6} {r.bet_side:<6} "
+                f"{r.line:>4.1f} {r.bet_odds:>+6} {r.actual_stat:>4} "
                 f"{'W' if r.won else 'L':>4} {r.edge:>5.3f} {r.clv:>+6.3f}"
             )
         L.append("")
@@ -887,15 +1143,15 @@ def format_report(
          f"CLV = {metrics['avg_clv']:+.4f}"),
         ("Calibration gap < 0.05", metrics["max_cal_gap"] < 0.05,
          f"Max gap = {metrics['max_cal_gap']:.4f}"),
-        ("Minutes MAE starters ≤ 2.8", metrics["min_mae_starters"] <= 2.8,
+        ("Minutes MAE starters <= 2.8", metrics["min_mae_starters"] <= 2.8,
          f"MAE = {metrics['min_mae_starters']:.2f}"),
-        ("Minutes MAE bench ≤ 3.5", metrics["min_mae_bench"] <= 3.5,
+        ("Minutes MAE bench <= 3.5", metrics["min_mae_bench"] <= 3.5,
          f"MAE = {metrics['min_mae_bench']:.2f}"),
         ("Beats book (log loss)", metrics["log_loss"] < metrics["book_log_loss"],
          f"{metrics['log_loss']:.4f} vs {metrics['book_log_loss']:.4f}"),
         ("Beats rolling avg (log loss)", metrics["log_loss"] < metrics["ra_log_loss"],
          f"{metrics['log_loss']:.4f} vs {metrics['ra_log_loss']:.4f}"),
-        ("≥100 paper bets", nb >= 100, f"{nb} bets"),
+        (">=100 paper bets", nb >= 100, f"{nb} bets"),
         ("Positive ROI", metrics["roi"] > 0, f"ROI = {metrics['roi']:+.1%}"),
     ]
     for name, passed, detail in gates:
@@ -910,19 +1166,25 @@ def format_report(
 
     # 8. Live predictions
     if live_preds:
-        L.append("")
-        L.append("  8. LIVE PREDICTIONS (real odds from The Odds API)")
-        L.append(dash)
-        L.append(f"  {'Player':<22} {'Ln':>4} {'Odds':>12} {'Model':>7} {'Book':>6} {'Edge':>7} {'Bet':>6}")
-        for p in live_preds[:30]:
-            odds_str = f"{p['odds_over']:+d}/{p['odds_under']:+d}"
-            bet_str = p["bet_side"].upper() if p["bet_side"] else "—"
-            L.append(
-                f"  {p['player'][:21]:<22} {p['line']:>4.1f} {odds_str:>12} "
-                f"{p['model_p_over']:>6.1%} {p['book_p_over']:>5.1%} "
-                f"{p['edge']:>+6.3f} {bet_str:>6}"
-            )
-        L.append(sep)
+        filtered_preds = live_preds
+        if stat_type:
+            filtered_preds = [p for p in live_preds if p.get("stat_type") == stat_type]
+
+        if filtered_preds:
+            L.append("")
+            L.append(f"  8. LIVE PREDICTIONS (real odds from The Odds API)")
+            L.append(dash)
+            L.append(f"  {'Player':<22} {'Stat':<5} {'Ln':>4} {'Odds':>12} {'Model':>7} {'Book':>6} {'Edge':>7} {'Bet':>6}")
+            for p in filtered_preds[:30]:
+                odds_str = f"{p['odds_over']:+d}/{p['odds_under']:+d}"
+                bet_str = p["bet_side"].upper() if p["bet_side"] else "—"
+                st_short = "3PM" if p.get("stat_type") == STAT_FG3M else "AST"
+                L.append(
+                    f"  {p['player'][:21]:<22} {st_short:<5} {p['line']:>4.1f} {odds_str:>12} "
+                    f"{p['model_p_over']:>6.1%} {p['book_p_over']:>5.1%} "
+                    f"{p['edge']:>+6.3f} {bet_str:>6}"
+                )
+            L.append(sep)
 
     return "\n".join(L)
 
@@ -934,7 +1196,7 @@ def main():
     import argparse
 
     parser = argparse.ArgumentParser(
-        description="NBA 3PM Props Engine v1.1 — Real Data Only Validation",
+        description="NBA Player Props Engine v2.0 — Real Data Only Validation (fg3m + assists)",
     )
     parser.add_argument("--start-date", default="2025-01-01")
     parser.add_argument("--end-date", default="2025-03-03")
@@ -942,10 +1204,23 @@ def main():
     parser.add_argument("--skip-live", action="store_true", help="Skip live Odds API fetch")
     parser.add_argument("--sgo-start", default=None, help="SGO fetch start date (if quota available)")
     parser.add_argument("--sgo-end", default=None, help="SGO fetch end date")
+    parser.add_argument(
+        "--stat-types",
+        default="fg3m,assists",
+        help="Comma-separated stat types to run (default: fg3m,assists)",
+    )
     args = parser.parse_args()
 
+    # Parse stat types
+    requested_stats = tuple(s.strip() for s in args.stat_types.split(","))
+    for st in requested_stats:
+        if st not in SUPPORTED_STATS:
+            logger.error("Unsupported stat type: %s (supported: %s)", st, ", ".join(SUPPORTED_STATS))
+            return
+
     logger.info("=" * 60)
-    logger.info("NBA 3PM Props Engine v1.1 — REAL DATA VALIDATION")
+    logger.info("NBA Player Props Engine v2.0 — REAL DATA VALIDATION")
+    logger.info("Stat types: %s", ", ".join(requested_stats))
     logger.info("=" * 60)
 
     # ── Load real BBRef game logs ──
@@ -960,7 +1235,7 @@ def main():
     if args.sgo_start and args.sgo_end:
         try:
             events = fetch_sgo_events(args.sgo_start, args.sgo_end)
-            props.extend(extract_sgo_props(events))
+            props.extend(extract_sgo_props(events, stat_types=requested_stats))
         except Exception as e:
             logger.warning("SGO fetch failed: %s", e)
 
@@ -968,7 +1243,7 @@ def main():
     live_preds = None
     if not args.skip_live:
         try:
-            live_props = fetch_odds_api_live_props()
+            live_props = fetch_odds_api_live_props(stat_types=requested_stats)
             if live_props:
                 live_preds = predict_live(live_props, player_logs)
                 logger.info("Generated %d live predictions", len(live_preds))
@@ -986,40 +1261,68 @@ def main():
         logger.info("or results below use model accuracy metrics only.")
 
     # If no SGO props, run model accuracy evaluation using BBRef data alone
-    # (no betting metrics since we have no real odds to bet against)
     if not records:
         logger.info("Computing model accuracy from BBRef game logs only...")
-        records = _evaluate_model_accuracy_only(player_logs, args.start_date, args.end_date)
+        records = _evaluate_model_accuracy_only(
+            player_logs, args.start_date, args.end_date,
+            stat_types=requested_stats,
+        )
 
     if not records:
         logger.error("No records produced.")
         return
 
-    metrics = compute_metrics(records)
-    report = format_report(metrics, records, live_preds)
-    print(report)
+    # Compute metrics per stat type and combined
+    all_metrics: dict[str, dict] = {}
+    for st in requested_stats:
+        st_records = [r for r in records if r.stat_type == st]
+        if st_records:
+            all_metrics[st] = compute_metrics(st_records, stat_type=st)
 
+    # Generate reports per stat type
     out_dir = Path(args.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-    (out_dir / f"validation_report_{ts}.txt").write_text(report)
-    (out_dir / f"validation_metrics_{ts}.json").write_text(
-        json.dumps(metrics, indent=2, default=str)
+
+    for st in requested_stats:
+        st_metrics = all_metrics.get(st)
+        if not st_metrics:
+            logger.warning("No records for stat type %s, skipping report", st)
+            continue
+
+        st_records = [r for r in records if r.stat_type == st]
+        report = format_report(
+            st_metrics, st_records, live_preds,
+            stat_type=st, all_metrics=all_metrics,
+        )
+        print(report)
+        print()
+
+        (out_dir / f"validation_report_{st}_{ts}.txt").write_text(report)
+        (out_dir / f"validation_metrics_{st}_{ts}.json").write_text(
+            json.dumps(st_metrics, indent=2, default=str)
+        )
+
+    # Save combined metrics
+    (out_dir / f"validation_metrics_combined_{ts}.json").write_text(
+        json.dumps(all_metrics, indent=2, default=str)
     )
-    logger.info("Saved to %s", out_dir)
+
+    logger.info("Saved reports to %s", out_dir)
 
 
 def _evaluate_model_accuracy_only(
     player_logs: dict[str, list[dict]],
     start_date: str,
     end_date: str,
+    stat_types: tuple[str, ...] = (STAT_FG3M,),
 ) -> list[EvalRecord]:
     """Evaluate model prediction accuracy using ONLY real BBRef stats.
 
     Since we have no real odds here, betting metrics (ROI, CLV) are not
     computed — those require real sportsbook lines.
     """
-    predictor = ThreePMPredictor()
+    predictors: dict[str, ThreePMPredictor | AssistsPredictor] = {}
     records = []
 
     for pname, games in player_logs.items():
@@ -1032,43 +1335,81 @@ def _evaluate_model_accuracy_only(
 
             train = games_sorted[:i]
 
-            # Evaluate at standard lines this player would see
-            avg_3pm = np.mean([g["fg3"] for g in train[-15:]])
-            if avg_3pm < 1.3:
-                line = 0.5
-            elif avg_3pm < 2.3:
-                line = 1.5
-            elif avg_3pm < 3.3:
-                line = 2.5
-            else:
-                line = 3.5
+            for stat_type in stat_types:
+                stat_field = BBREF_STAT_FIELD.get(stat_type, "fg3")
 
-            pred = predictor.predict(train, line)
-            went_over = game["fg3"] > line
+                # Get predictor
+                if stat_type not in predictors:
+                    predictors[stat_type] = get_predictor(stat_type)
+                predictor = predictors[stat_type]
 
-            records.append(EvalRecord(
-                source="bbref_accuracy",
-                game_date=game["date"],
-                player_name=pname,
-                line=line,
-                actual_3pm=game["fg3"],
-                went_over=went_over,
-                model_p_over=pred["p_over"],
-                model_mean_3pm=pred["mean_3pm"],
-                model_pred_minutes=pred["pred_minutes"],
-                model_pred_3pa_per36=pred["pred_3pa_per36"],
-                model_pred_fg3_pct=pred["pred_fg3_pct"],
-                rolling_avg_p_over=sum(1 for g in train[-15:] if g["fg3"] > line) / min(len(train), 15),
-                book_p_over=0.5,  # no real odds — bookmaker baseline N/A
-                odds_over=0, odds_under=0,
-                closing_odds_over=0, closing_odds_under=0,
-                actual_minutes=game["mp"],
-                actual_3pa=game["fg3a"],
-                starter=game.get("starter", True),
-                # No betting — no real odds to bet against
-            ))
+                # Evaluate at standard lines this player would see
+                recent_vals = [g[stat_field] for g in train[-15:]]
+                avg_val = np.mean(recent_vals)
 
-    logger.info("Model accuracy: %d records from real BBRef stats", len(records))
+                if stat_type == STAT_FG3M:
+                    if avg_val < 1.3:
+                        line = 0.5
+                    elif avg_val < 2.3:
+                        line = 1.5
+                    elif avg_val < 3.3:
+                        line = 2.5
+                    else:
+                        line = 3.5
+                elif stat_type == STAT_ASSISTS:
+                    if avg_val < 2.3:
+                        line = 1.5
+                    elif avg_val < 3.3:
+                        line = 2.5
+                    elif avg_val < 4.3:
+                        line = 3.5
+                    elif avg_val < 5.3:
+                        line = 4.5
+                    elif avg_val < 6.3:
+                        line = 5.5
+                    elif avg_val < 8.0:
+                        line = 6.5
+                    else:
+                        line = 8.5
+                else:
+                    line = 2.5
+
+                pred = predictor.predict(train, line)
+                actual_val = game[stat_field]
+                went_over = actual_val > line
+
+                # Determine actual attempts
+                if stat_type == STAT_FG3M:
+                    actual_attempts = game["fg3a"]
+                else:
+                    actual_attempts = 0
+
+                records.append(EvalRecord(
+                    source="bbref_accuracy",
+                    game_date=game["date"],
+                    player_name=pname,
+                    line=line,
+                    actual_stat=actual_val,
+                    went_over=went_over,
+                    model_p_over=pred["p_over"],
+                    model_mean_stat=pred["mean_stat"],
+                    model_pred_minutes=pred["pred_minutes"],
+                    model_pred_rate_per36=pred["pred_rate_per36"],
+                    model_pred_make_pct=pred["pred_make_pct"],
+                    rolling_avg_p_over=sum(1 for g in train[-15:] if g[stat_field] > line) / min(len(train), 15),
+                    book_p_over=0.5,  # no real odds — bookmaker baseline N/A
+                    odds_over=0, odds_under=0,
+                    closing_odds_over=0, closing_odds_under=0,
+                    stat_type=stat_type,
+                    actual_minutes=game["mp"],
+                    actual_attempts=actual_attempts,
+                    starter=game.get("starter", True),
+                    # No betting — no real odds to bet against
+                ))
+
+    for st in stat_types:
+        count = sum(1 for r in records if r.stat_type == st)
+        logger.info("Model accuracy (%s): %d records from real BBRef stats", st, count)
     return records
 
 
