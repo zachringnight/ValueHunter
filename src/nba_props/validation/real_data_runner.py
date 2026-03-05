@@ -167,6 +167,11 @@ SGO_STAT_CONFIG = {
 ODDS_API_MARKET_MAP = {
     STAT_FG3M: "player_threes",
     STAT_ASSISTS: "player_assists",
+    STAT_POINTS: "player_points",
+    STAT_REBOUNDS: "player_rebounds",
+    STAT_STEALS: "player_steals",
+    STAT_BLOCKS: "player_blocks",
+    STAT_TURNOVERS: "player_turnovers",
 }
 
 # Mapping from stat type to BBRef game log field
@@ -1774,9 +1779,10 @@ class ThreePMPredictor:
         raw_rate = total_3pa / max(total_min, 1) * 36.0
         league_rate = 7.5
         n_eff = total_min / 36.0
+        adaptive_prior = self.prior_strength * max(0.2, 1.0 - n_eff / 25.0)
         shrunk_rate = (
-            (raw_rate * n_eff + league_rate * self.prior_strength)
-            / (n_eff + self.prior_strength)
+            (raw_rate * n_eff + league_rate * adaptive_prior)
+            / (n_eff + adaptive_prior)
         )
 
         # ── Scheme matchup: attempt rate adjustment ──────────────────
@@ -2020,7 +2026,8 @@ class AssistsPredictor:
         total_ast = np.sum(assists)
         raw_rate = total_ast / max(total_min, 1) * 36.0
         n_eff = total_min / 36.0
-        shrunk_rate = (raw_rate * n_eff + LEAGUE_AST_PER_36 * self.prior_strength) / (n_eff + self.prior_strength)
+        adaptive_prior = self.prior_strength * max(0.2, 1.0 - n_eff / 25.0)
+        shrunk_rate = (raw_rate * n_eff + LEAGUE_AST_PER_36 * adaptive_prior) / (n_eff + adaptive_prior)
 
         # Opponent assists-allowed adjustment
         opp_ast = ctx.get("opp_ast_per_game", 0.0)
@@ -2198,14 +2205,19 @@ class BoxScorePredictor:
             minutes_adj = 1.0 - min(blowout_excess * 0.02, 0.12)
             min_mean *= minutes_adj
 
-        # ── Rate per 36 with shrinkage ─────────────────────────────
+        # ── Rate per 36 with adaptive shrinkage ──────────────────
+        # Prior fades as sample grows — stars with large samples
+        # keep their actual rates, while low-sample players get
+        # pulled toward the league average.
         total_min = np.sum(minutes)
         total_stat = np.sum(stat_vals)
         raw_rate = total_stat / max(total_min, 1) * 36.0
         n_eff = total_min / 36.0
+        # Scale prior strength: full strength at n_eff=5, half at n_eff=15
+        adaptive_prior = self.prior_strength * max(0.2, 1.0 - n_eff / 25.0)
         shrunk_rate = (
-            (raw_rate * n_eff + self.league_rate * self.prior_strength)
-            / (n_eff + self.prior_strength)
+            (raw_rate * n_eff + self.league_rate * adaptive_prior)
+            / (n_eff + adaptive_prior)
         )
 
         # ── Opponent allowed adjustment (baseline for all stats) ──

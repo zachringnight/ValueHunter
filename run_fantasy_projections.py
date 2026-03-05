@@ -32,6 +32,7 @@ from nba_props.validation.real_data_runner import (
     ODDS_API_BASE,
     BBREF_HEADERS,
     _ODDS_API_TO_BBREF,
+    ODDS_API_MARKET_MAP,
     scrape_bbref_game_logs,
     ThreePMPredictor,
     AssistsPredictor,
@@ -41,6 +42,7 @@ from nba_props.validation.real_data_runner import (
     ALL_FANTASY_STATS,
     BBREF_STAT_FIELD_ALL,
     fetch_nba_opponent_shooting,
+    _CACHE_DIR,
 )
 
 # Import advanced context fetchers
@@ -74,6 +76,92 @@ _BBREF_TEAM_CODES = {
 # Minimum games and minutes to generate a projection
 MIN_GAMES = 5
 MIN_AVG_MINUTES = 12.0
+
+# Prop-line market weight — how much to blend market-implied line into projection
+# 0.0 = ignore market, 1.0 = use market as-is.  0.20 = 20% weight to market consensus.
+MARKET_BLEND_WEIGHT = 0.20
+
+
+def fetch_all_fantasy_props() -> dict[str, dict[str, float]]:
+    """Fetch prop lines for all fantasy stat types from Odds API.
+
+    Returns dict keyed by (lowercase player name) -> {stat_type: line}.
+    Uses persistent cache with 4-hour TTL.
+    """
+    cache_path = _CACHE_DIR / "fantasy_prop_lines.json"
+    if cache_path.exists():
+        from datetime import datetime as dt
+        mtime = dt.fromtimestamp(cache_path.stat().st_mtime)
+        age_hours = (dt.now() - mtime).total_seconds() / 3600
+        if age_hours < 4:
+            logger.info("Using cached prop lines (%.1fh old)", age_hours)
+            with open(cache_path) as f:
+                return json.load(f)
+
+    logger.info("Fetching prop lines for all fantasy stat types...")
+    # Get events
+    try:
+        resp = requests.get(
+            f"{ODDS_API_BASE}/sports/basketball_nba/events",
+            params={"apiKey": ODDS_API_KEY}, timeout=15,
+        )
+        resp.raise_for_status()
+        events = resp.json()
+    except Exception as e:
+        logger.warning("Failed to fetch events for props: %s", e)
+        if cache_path.exists():
+            with open(cache_path) as f:
+                return json.load(f)
+        return {}
+
+    # Markets to request
+    all_markets = ",".join(ODDS_API_MARKET_MAP.values())
+    reverse_map = {v: k for k, v in ODDS_API_MARKET_MAP.items()}
+
+    props: dict[str, dict[str, float]] = {}
+
+    for ev in events:
+        eid = ev["id"]
+        try:
+            time.sleep(0.3)
+            resp2 = requests.get(
+                f"{ODDS_API_BASE}/sports/basketball_nba/events/{eid}/odds",
+                params={
+                    "apiKey": ODDS_API_KEY, "regions": "us",
+                    "markets": all_markets, "oddsFormat": "american",
+                },
+                timeout=15,
+            )
+            if resp2.status_code != 200:
+                continue
+            ev_data = resp2.json()
+        except Exception:
+            continue
+
+        for bk in ev_data.get("bookmakers", []):
+            for mkt in bk.get("markets", []):
+                market_key = mkt.get("key", "")
+                stat_type = reverse_map.get(market_key, "")
+                if not stat_type:
+                    continue
+                for outcome in mkt.get("outcomes", []):
+                    player = outcome.get("description", "").lower()
+                    line = float(outcome.get("point", 0))
+                    if player and line > 0:
+                        props.setdefault(player, {})
+                        # Use the line — multiple books will give similar lines,
+                        # just take the latest (consensus is tight)
+                        props[player][stat_type] = line
+
+    remaining = resp.headers.get("x-requests-remaining", "?")
+    logger.info(
+        "Fetched prop lines for %d players across %d events (%s API calls left)",
+        len(props), len(events), remaining,
+    )
+
+    with open(cache_path, "w") as f:
+        json.dump(props, f, indent=2)
+    return props
 
 
 def get_tonight_games():
@@ -315,18 +403,39 @@ def build_fantasy_context(
     return ctx
 
 
+def _blend_with_market(model_proj: float, market_line: float, weight: float) -> float:
+    """Blend model projection with market-implied line.
+
+    The market line represents the consensus of sharp and recreational money.
+    A weighted blend anchors the model to market reality while still allowing
+    the model's edge to show through.
+    """
+    if market_line <= 0:
+        return model_proj
+    return model_proj * (1.0 - weight) + market_line * weight
+
+
 def project_player(
     player_name: str,
     games: list[dict],
     game_context: dict,
+    prop_lines: dict[str, float] | None = None,
 ) -> dict | None:
-    """Generate full box score projection for one player."""
+    """Generate full box score projection for one player.
+
+    If prop_lines is provided (stat_type -> line), the model projection is
+    blended with the market line using MARKET_BLEND_WEIGHT. This anchors
+    projections to market consensus while preserving model edge.
+    """
     if len(games) < MIN_GAMES:
         return None
 
     avg_min = np.mean([g["mp"] for g in games[-15:]])
     if avg_min < MIN_AVG_MINUTES:
         return None
+
+    props = prop_lines or {}
+    w = MARKET_BLEND_WEIGHT
 
     projection = {
         "player": player_name,
@@ -341,28 +450,40 @@ def project_player(
 
     # 3PM projection
     fg3_result = fg3_pred.predict(games, line=0, game_context=game_context)
-    projection["fg3m"] = round(fg3_result["mean_stat"], 1)
-    projection["fg3m_floor"] = round(fg3_result.get("mean_stat", 0) - fg3_result.get("std_stat", 0), 1)
-    projection["fg3m_ceiling"] = round(fg3_result.get("mean_stat", 0) + fg3_result.get("std_stat", 0), 1)
+    fg3m_raw = fg3_result["mean_stat"]
+    fg3m_market = props.get(STAT_FG3M, 0)
+    fg3m_final = _blend_with_market(fg3m_raw, fg3m_market, w)
+    projection["fg3m"] = round(fg3m_final, 1)
+    projection["fg3m_model"] = round(fg3m_raw, 1)
+    projection["fg3m_market"] = fg3m_market
+    projection["fg3m_floor"] = round(fg3m_final - fg3_result.get("std_stat", 0), 1)
+    projection["fg3m_ceiling"] = round(fg3m_final + fg3_result.get("std_stat", 0), 1)
 
     # Assists projection
     ast_result = ast_pred.predict(games, line=0, game_context=game_context)
-    projection["ast"] = round(ast_result["mean_stat"], 1)
+    ast_raw = ast_result["mean_stat"]
+    ast_market = props.get(STAT_ASSISTS, 0)
+    projection["ast"] = round(_blend_with_market(ast_raw, ast_market, w), 1)
+    projection["ast_model"] = round(ast_raw, 1)
+    projection["ast_market"] = ast_market
 
     # Minutes
     projection["min"] = round(fg3_result["pred_minutes"], 1)
 
     # All other stats via generic predictor
-    for stat_type in [STAT_POINTS, STAT_REBOUNDS, STAT_STEALS,
-                      STAT_BLOCKS, STAT_TURNOVERS, STAT_FTM, STAT_FGM]:
+    stat_short = {
+        STAT_POINTS: "pts", STAT_REBOUNDS: "reb", STAT_STEALS: "stl",
+        STAT_BLOCKS: "blk", STAT_TURNOVERS: "tov", STAT_FTM: "ftm",
+        STAT_FGM: "fgm",
+    }
+    for stat_type, short_name in stat_short.items():
         pred = BoxScorePredictor(stat_type)
         result = pred.predict(games, line=0, game_context=game_context)
-        short_name = {
-            STAT_POINTS: "pts", STAT_REBOUNDS: "reb", STAT_STEALS: "stl",
-            STAT_BLOCKS: "blk", STAT_TURNOVERS: "tov", STAT_FTM: "ftm",
-            STAT_FGM: "fgm",
-        }[stat_type]
-        projection[short_name] = round(result["mean_stat"], 1)
+        raw = result["mean_stat"]
+        market = props.get(stat_type, 0)
+        projection[short_name] = round(_blend_with_market(raw, market, w), 1)
+        projection[f"{short_name}_model"] = round(raw, 1)
+        projection[f"{short_name}_market"] = market
 
     # Derived stats
     recent = games[-15:]
@@ -482,8 +603,17 @@ def main():
         game_lookup[g["home"]] = {"opp": g["away"], "is_home": True}
         game_lookup[g["away"]] = {"opp": g["home"], "is_home": False}
 
-    # Step 3: Generate projections
+    # Step 3: Fetch prop lines (market consensus) for all stat types
+    all_prop_lines = {}
+    try:
+        all_prop_lines = fetch_all_fantasy_props()
+        logger.info("Loaded prop lines for %d players", len(all_prop_lines))
+    except Exception as e:
+        logger.warning("Could not fetch prop lines: %s — proceeding without market data", e)
+
+    # Step 4: Generate projections
     projections = []
+    props_used = 0
     for player_name, games in all_logs.items():
         if not games:
             continue
@@ -500,11 +630,22 @@ def main():
             is_home=game_info["is_home"],
         )
 
-        proj = project_player(player_name, games, ctx)
+        # Look up prop lines for this player (case-insensitive match)
+        player_props = all_prop_lines.get(player_name.lower(), {})
+        if player_props:
+            props_used += 1
+
+        proj = project_player(player_name, games, ctx, prop_lines=player_props)
         if proj:
             proj["opp"] = game_info["opp"]
             proj["is_home"] = game_info["is_home"]
+            proj["has_prop_lines"] = bool(player_props)
             projections.append(proj)
+
+    logger.info(
+        "Generated %d projections (%d with market prop anchoring)",
+        len(projections), props_used,
+    )
 
     # Sort by DK fantasy points
     projections.sort(key=lambda p: p.get("dk_fantasy_pts", 0), reverse=True)
