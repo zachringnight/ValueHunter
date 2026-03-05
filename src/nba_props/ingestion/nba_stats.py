@@ -372,6 +372,144 @@ class NBAStatsClient:
         data = self._request("leaguedashoppptshot", params)
         return self._result_set_to_dicts(data)
 
+    def get_opponent_shooting_by_zone(
+        self,
+        season: str,
+        season_type: str = "Regular Season",
+    ) -> list[dict[str, Any]]:
+        """Fetch team opponent shooting by shot zone (paint, mid-range,
+        corner 3, above-the-break 3, backcourt).
+
+        Uses the ``leaguedashteamshotlocations`` endpoint with
+        ``MeasureType: Opponent`` to get zone-level allowed shooting.
+        """
+        params: dict[str, Any] = {
+            "Conference": "",
+            "DateFrom": "",
+            "DateTo": "",
+            "DistanceRange": "By Zone",
+            "Division": "",
+            "GameScope": "",
+            "GameSegment": "",
+            "LastNGames": 0,
+            "LeagueID": "00",
+            "Location": "",
+            "MeasureType": "Opponent",
+            "Month": 0,
+            "OpponentTeamID": 0,
+            "Outcome": "",
+            "PORound": 0,
+            "PaceAdjust": "N",
+            "PerMode": "PerGame",
+            "Period": 0,
+            "PlayerExperience": "",
+            "PlayerPosition": "",
+            "PlusMinus": "N",
+            "Rank": "N",
+            "Season": season,
+            "SeasonSegment": "",
+            "SeasonType": season_type,
+            "ShotClockRange": "",
+            "StarterBench": "",
+            "TeamID": 0,
+            "VsConference": "",
+            "VsDivision": "",
+        }
+        data = self._request("leaguedashteamshotlocations", params)
+        return self._parse_shot_locations(data)
+
+    def get_opponent_play_type_defense(
+        self,
+        season: str,
+        season_type: str = "Regular Season",
+    ) -> list[dict[str, Any]]:
+        """Fetch team play-type defensive stats from the Synergy-style
+        ``synergyplaytypes`` endpoint.
+
+        Returns per-team defensive stats for play types: isolation,
+        transition, pick-and-roll ball handler, pick-and-roll roll man,
+        spot-up, post-up, hand-off, cut, off-screen.
+        """
+        all_rows: list[dict[str, Any]] = []
+        play_types = [
+            "Isolation",
+            "Transition",
+            "PRBallHandler",
+            "PRRollman",
+            "Spotup",
+            "Postup",
+            "Handoff",
+            "Cut",
+            "OffScreen",
+        ]
+        for pt in play_types:
+            params: dict[str, Any] = {
+                "LeagueID": "00",
+                "PerMode": "PerGame",
+                "PlayType": pt,
+                "PlayerOrTeam": "T",
+                "SeasonType": season_type,
+                "Season": season,
+                "TypeGrouping": "defensive",
+            }
+            try:
+                data = self._request("synergyplaytypes", params)
+                rows = self._result_set_to_dicts(data)
+                for row in rows:
+                    row["PLAY_TYPE"] = pt
+                all_rows.extend(rows)
+            except Exception as e:
+                logger.warning("Play type %s defense fetch failed: %s", pt, e)
+        return all_rows
+
+    # ------------------------------------------------------------------
+    # Shot location response parsing
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _parse_shot_locations(data: dict[str, Any]) -> list[dict[str, Any]]:
+        """Parse the multi-header ``leaguedashteamshotlocations`` response.
+
+        This endpoint returns a complex structure where each result set
+        has grouped column headers (zone names) with sub-columns (FGM, FGA, FG_PCT).
+        We flatten into one dict per team with zone-prefixed keys.
+        """
+        try:
+            result_set = data["resultSets"]["rowSet"] if "rowSet" in data.get("resultSets", {}) else None
+            if result_set is None:
+                # Try the standard format
+                rs = data["resultSets"][0]
+                headers = rs["headers"]
+                rows = rs["rowSet"]
+
+                # Shot locations has a special two-row header structure
+                # First row = zone group names, second row = stat names
+                if isinstance(headers[0], list):
+                    # Multi-level headers
+                    zone_headers = headers[0]
+                    stat_headers = headers[1]
+                    flat_headers = []
+                    for zh, sh in zip(zone_headers, stat_headers):
+                        zone = zh.get("columnNames", [zh.get("name", "")])[0] if isinstance(zh, dict) else str(zh)
+                        flat_headers.append(f"{zone}_{sh}" if zone else sh)
+                    return [dict(zip(flat_headers, row)) for row in rows]
+                else:
+                    return [dict(zip(headers, row)) for row in rows]
+        except (KeyError, IndexError, TypeError) as exc:
+            logger.warning("Failed to parse shot location response: %s", exc)
+            # Fallback: try standard parsing
+            try:
+                rs = data["resultSets"][0]
+                headers = rs["headers"]
+                if isinstance(headers, list) and len(headers) > 0:
+                    # Handle columnar headers with zone prefixes
+                    col_headers = headers[1] if len(headers) > 1 and isinstance(headers[1], list) else headers
+                    rows = rs["rowSet"]
+                    return [dict(zip(col_headers, row)) for row in rows]
+            except Exception:
+                pass
+        return []
+
     # ------------------------------------------------------------------
     # Internal
     # ------------------------------------------------------------------
