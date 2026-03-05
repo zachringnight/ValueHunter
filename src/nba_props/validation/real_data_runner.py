@@ -141,6 +141,8 @@ LEAGUE_AVG_OPP_ALLOWED = {
     STAT_BLOCKS: 5.0,
     STAT_TURNOVERS: 14.0,
     STAT_ASSISTS: 26.0,
+    STAT_FGM: 41.0,
+    STAT_FTM: 18.0,
 }
 
 # Mapping from stat type to SGO odds key prefix and market name suffix
@@ -767,9 +769,27 @@ def fetch_nba_opponent_general(
         if not bbref:
             continue
         opp_data[bbref] = {
-            "opp_ast_per_game": round(float(row.get("OPP_AST", 0)), 1),
-            "opp_tov_per_game": round(float(row.get("OPP_TOV", 0)), 1),
+            # Core per-game stats allowed
             "opp_pts_per_game": round(float(row.get("OPP_PTS", 0)), 1),
+            "opp_reb_per_game": round(float(row.get("OPP_REB", 0)), 1),
+            "opp_oreb_per_game": round(float(row.get("OPP_OREB", 0)), 1),
+            "opp_dreb_per_game": round(float(row.get("OPP_DREB", 0)), 1),
+            "opp_ast_per_game": round(float(row.get("OPP_AST", 0)), 1),
+            "opp_stl_per_game": round(float(row.get("OPP_STL", 0)), 1),
+            "opp_blk_per_game": round(float(row.get("OPP_BLK", 0)), 1),
+            "opp_tov_per_game": round(float(row.get("OPP_TOV", 0)), 1),
+            "opp_pf_per_game": round(float(row.get("OPP_PF", 0)), 1),
+            # Shooting allowed
+            "opp_fgm_per_game": round(float(row.get("OPP_FGM", 0)), 1),
+            "opp_fga_per_game": round(float(row.get("OPP_FGA", 0)), 1),
+            "opp_fg_pct": round(float(row.get("OPP_FG_PCT", 0)), 4),
+            "opp_fg3m_per_game": round(float(row.get("OPP_FG3M", 0)), 1),
+            "opp_fg3a_per_game": round(float(row.get("OPP_FG3A", 0)), 1),
+            "opp_fg3_pct": round(float(row.get("OPP_FG3_PCT", 0)), 4),
+            "opp_ftm_per_game": round(float(row.get("OPP_FTM", 0)), 1),
+            "opp_fta_per_game": round(float(row.get("OPP_FTA", 0)), 1),
+            "opp_ft_pct": round(float(row.get("OPP_FT_PCT", 0)), 4),
+            # Pace
             "pace": round(float(row.get("OPP_PACE", 0) if "OPP_PACE" in row else 0), 1),
         }
 
@@ -2181,6 +2201,36 @@ class BoxScorePredictor:
                 pace_ratio = np.clip(game_total / 228.0, 0.90, 1.10)
                 shrunk_rate *= pace_ratio
 
+        # ── Defensive rating environment adjustment ──────────────
+        opp_def_rating = ctx.get("opp_def_rating", 0.0)
+        if opp_def_rating > 0 and self.stat_type in (
+            STAT_POINTS, STAT_FGM, STAT_FTM
+        ):
+            # Higher def rating = worse defense = more scoring
+            def_adj = np.clip(opp_def_rating / 112.0, 0.93, 1.07)
+            shrunk_rate *= def_adj
+
+        # ── Hustle stats adjustment (deflections affect TOV/STL) ─
+        if self.stat_type == STAT_TURNOVERS:
+            defl = ctx.get("opp_deflections", 0.0)
+            if defl > 0:
+                # More deflections = more forced turnovers
+                defl_adj = np.clip(defl / 15.0, 0.95, 1.05)
+                shrunk_rate *= defl_adj
+        elif self.stat_type == STAT_STEALS:
+            # Player's steal rate benefits from opponent's turnover tendency
+            opp_tov = ctx.get("opp_tov_per_game", 0.0)
+            if opp_tov > 0:
+                tov_adj = np.clip(opp_tov / 14.0, 0.93, 1.07)
+                shrunk_rate *= tov_adj
+
+        # ── Free throw environment (opp fouls drawn) ────────────
+        if self.stat_type == STAT_FTM:
+            opp_pf = ctx.get("opp_pf_per_game", 0.0)
+            if opp_pf > 0:
+                foul_adj = np.clip(opp_pf / 20.0, 0.93, 1.07)
+                shrunk_rate *= foul_adj
+
         # ── Overdispersion ─────────────────────────────────────────
         if len(games) >= 5 and np.mean(stat_vals) > 0:
             var = np.var(stat_vals)
@@ -2229,6 +2279,8 @@ class BoxScorePredictor:
             STAT_BLOCKS: "opp_blk_per_game",
             STAT_TURNOVERS: "opp_tov_per_game",
             STAT_ASSISTS: "opp_ast_per_game",
+            STAT_FGM: "opp_fgm_per_game",
+            STAT_FTM: "opp_ftm_per_game",
         }.get(self.stat_type, "")
 
 

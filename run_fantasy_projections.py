@@ -43,16 +43,17 @@ from nba_props.validation.real_data_runner import (
     fetch_nba_opponent_shooting,
 )
 
-# Try importing advanced context fetchers
+# Import advanced context fetchers
 try:
     from nba_props.validation.real_data_runner import (
-        fetch_nba_opponent_tracking,
-        fetch_nba_player_tracking,
-        fetch_nba_team_stats,
+        fetch_nba_opponent_general,
+        fetch_nba_team_advanced,
+        fetch_nba_opp_tracking_shooting,
         fetch_nba_synergy_defense,
-        fetch_nba_player_synergy,
-        fetch_nba_hustle_stats,
-        build_game_context,
+        fetch_nba_synergy_player,
+        fetch_nba_team_hustle,
+        fetch_nba_player_advanced,
+        fetch_nba_opp_shot_clock,
     )
     HAS_ADVANCED = True
 except ImportError:
@@ -135,18 +136,32 @@ def build_fantasy_context(
     player_name: str,
     games: list[dict],
     opp_abbr: str,
+    player_team_abbr: str,
     is_home: bool,
     spread: float = 0.0,
     total: float = 228.0,
+    *,
+    _cache: dict = {},
 ) -> dict:
-    """Build game context dict for a player's fantasy projection."""
+    """Build game context dict for a player's fantasy projection.
+
+    Pulls from multiple NBA.com data sources:
+    - Opponent shooting zones (3PA/3P% allowed)
+    - Opponent general stats (all box score stats allowed per game)
+    - Team advanced (pace, def/off rating)
+    - Opponent tracking (wide-open/tight 3PA, catch-and-shoot)
+    - Synergy defense (play-type PPP/FG%)
+    - Team hustle (deflections, contested shots)
+    - Player advanced (USG%, AST%, TS%, pace)
+    - Player synergy (offensive play-type breakdown)
+    """
     ctx = {
         "spread": spread,
         "total": total,
         "is_home": is_home,
     }
 
-    # Try to load cached opponent data
+    # --- Opponent 3P shooting zone data ---
     try:
         opp_data = fetch_nba_opponent_shooting()
         opp_info = opp_data.get(opp_abbr, {})
@@ -159,24 +174,143 @@ def build_fantasy_context(
     except Exception:
         pass
 
-    # Load opponent general stats from advanced data if available
-    if HAS_ADVANCED:
-        try:
-            team_stats = fetch_nba_team_stats()
-            opp_ts = team_stats.get(opp_abbr, {})
+    if not HAS_ADVANCED:
+        return ctx
+
+    # --- Opponent general stats (all box score categories) ---
+    try:
+        if "opp_general" not in _cache:
+            _cache["opp_general"] = fetch_nba_opponent_general()
+        opp_gen = _cache["opp_general"].get(opp_abbr, {})
+        ctx.update(opp_gen)  # All opp_* keys directly
+    except Exception:
+        pass
+
+    # --- Team advanced stats (pace, ratings) ---
+    try:
+        if "team_advanced" not in _cache:
+            _cache["team_advanced"] = fetch_nba_team_advanced()
+        adv = _cache["team_advanced"]
+        opp_adv = adv.get(opp_abbr, {})
+        team_adv = adv.get(player_team_abbr, {})
+        ctx["opp_def_rating"] = opp_adv.get("def_rating", 110.0)
+        ctx["opp_off_rating"] = opp_adv.get("off_rating", 110.0)
+        ctx["opp_pace"] = opp_adv.get("pace", 100.0)
+        ctx["team_pace"] = team_adv.get("pace", 100.0)
+        ctx["team_off_rating"] = team_adv.get("off_rating", 110.0)
+        ctx["team_net_rating"] = team_adv.get("net_rating", 0.0)
+    except Exception:
+        pass
+
+    # --- Opponent tracking shooting (defender distance, catch-and-shoot) ---
+    try:
+        if "opp_tracking" not in _cache:
+            _cache["opp_tracking"] = fetch_nba_opp_tracking_shooting()
+        opp_trk = _cache["opp_tracking"].get(opp_abbr, {})
+        ctx.update({
+            "opp_wide_open_3pa": opp_trk.get("opp_wide_open_3pa", 0),
+            "opp_wide_open_3pct": opp_trk.get("opp_wide_open_3pct", 0),
+            "opp_open_3pa": opp_trk.get("opp_open_3pa", 0),
+            "opp_open_3pct": opp_trk.get("opp_open_3pct", 0),
+            "opp_tight_3pa": opp_trk.get("opp_tight_3pa", 0),
+            "opp_tight_3pct": opp_trk.get("opp_tight_3pct", 0),
+            "opp_catch_shoot_3pa": opp_trk.get("opp_catch_shoot_3pa", 0),
+            "opp_catch_shoot_3pct": opp_trk.get("opp_catch_shoot_3pct", 0),
+            "opp_pullup_3pa": opp_trk.get("opp_pullup_3pa", 0),
+            "opp_pullup_3pct": opp_trk.get("opp_pullup_3pct", 0),
+        })
+    except Exception:
+        pass
+
+    # --- Synergy play-type defense ---
+    try:
+        if "synergy_def" not in _cache:
+            _cache["synergy_def"] = fetch_nba_synergy_defense()
+        syn = _cache["synergy_def"].get(opp_abbr, {})
+        ctx.update({
+            "def_spotup_ppp": syn.get("def_spotup_ppp", 0),
+            "def_isolation_ppp": syn.get("def_isolation_ppp", 0),
+            "def_prballhandler_ppp": syn.get("def_prballhandler_ppp", 0),
+            "def_prrollman_ppp": syn.get("def_prrollman_ppp", 0),
+            "def_transition_ppp": syn.get("def_transition_ppp", 0),
+            "def_offscreen_ppp": syn.get("def_offscreen_ppp", 0),
+            "def_handoff_ppp": syn.get("def_handoff_ppp", 0),
+            "def_cut_ppp": syn.get("def_cut_ppp", 0),
+            "def_spotup_efg": syn.get("def_spotup_efg", 0),
+            "def_isolation_efg": syn.get("def_isolation_efg", 0),
+            "def_prballhandler_efg": syn.get("def_prballhandler_efg", 0),
+            "def_transition_efg": syn.get("def_transition_efg", 0),
+        })
+    except Exception:
+        pass
+
+    # --- Team hustle stats ---
+    try:
+        if "hustle" not in _cache:
+            _cache["hustle"] = fetch_nba_team_hustle()
+        hustle = _cache["hustle"].get(opp_abbr, {})
+        ctx.update({
+            "opp_deflections": hustle.get("deflections", 0),
+            "opp_contested_shots": hustle.get("contested_shots", 0),
+            "opp_contested_shots_3pt": hustle.get("contested_shots_3pt", 0),
+            "opp_loose_balls_recovered": hustle.get("loose_balls_recovered", 0),
+        })
+    except Exception:
+        pass
+
+    # --- Player advanced stats ---
+    try:
+        if "player_advanced" not in _cache:
+            _cache["player_advanced"] = fetch_nba_player_advanced()
+        pkey = player_name.lower()
+        padv = _cache["player_advanced"].get(pkey, {})
+        if padv:
             ctx.update({
-                "opp_pts_per_game": opp_ts.get("opp_pts_per_game", 0),
-                "opp_reb_per_game": opp_ts.get("opp_reb_per_game", 0),
-                "opp_ast_per_game": opp_ts.get("opp_ast_per_game", 0),
-                "opp_stl_per_game": opp_ts.get("opp_stl_per_game", 0),
-                "opp_blk_per_game": opp_ts.get("opp_blk_per_game", 0),
-                "opp_tov_per_game": opp_ts.get("opp_tov_per_game", 0),
-                "opp_pace": opp_ts.get("opp_pace", 100.0),
-                "opp_def_rating": opp_ts.get("opp_def_rating", 110.0),
-                "team_pace": opp_ts.get("team_pace", 100.0),
+                "player_usg_pct": padv.get("usg_pct", 0),
+                "player_ast_pct": padv.get("ast_pct", 0),
+                "player_ast_ratio": padv.get("ast_ratio", 0),
+                "player_ts_pct": padv.get("ts_pct", 0),
+                "player_efg_pct": padv.get("efg_pct", 0),
+                "player_pace": padv.get("pace", 0),
+                "player_off_rating": padv.get("off_rating", 0),
+                "player_pie": padv.get("pie", 0),
             })
-        except Exception:
-            pass
+    except Exception:
+        pass
+
+    # --- Player synergy offensive play types ---
+    try:
+        if "synergy_player" not in _cache:
+            _cache["synergy_player"] = fetch_nba_synergy_player()
+        pkey = player_name.lower()
+        psyn = _cache["synergy_player"].get(pkey, {})
+        if psyn:
+            ctx.update({
+                "player_spotup_freq": psyn.get("off_spotup_freq", 0),
+                "player_spotup_ppp": psyn.get("off_spotup_ppp", 0),
+                "player_iso_freq": psyn.get("off_isolation_freq", 0),
+                "player_iso_ppp": psyn.get("off_isolation_ppp", 0),
+                "player_pnr_freq": psyn.get("off_prballhandler_freq", 0),
+                "player_pnr_ppp": psyn.get("off_prballhandler_ppp", 0),
+                "player_transition_freq": psyn.get("off_transition_freq", 0),
+                "player_transition_ppp": psyn.get("off_transition_ppp", 0),
+                "player_offscreen_freq": psyn.get("off_offscreen_freq", 0),
+            })
+    except Exception:
+        pass
+
+    # --- Opponent shot clock data ---
+    try:
+        if "opp_shot_clock" not in _cache:
+            _cache["opp_shot_clock"] = fetch_nba_opp_shot_clock()
+        sc = _cache["opp_shot_clock"].get(opp_abbr, {})
+        ctx.update({
+            "opp_sc_early_3pa": sc.get("sc_early_3pa", 0),
+            "opp_sc_late_3pa": sc.get("sc_late_3pa", 0),
+            "opp_sc_late_3pct": sc.get("sc_late_3pct", 0),
+        })
+    except Exception:
+        pass
 
     return ctx
 
@@ -359,6 +493,7 @@ def main():
         ctx = build_fantasy_context(
             player_name, games,
             opp_abbr=game_info["opp"],
+            player_team_abbr=team,
             is_home=game_info["is_home"],
         )
 
