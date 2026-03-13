@@ -1,4 +1,4 @@
-name: NBA Props CI
+name: CI
 
 on:
   push:

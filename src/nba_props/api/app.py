@@ -1,4 +1,4 @@
-"""FastAPI application for NBA 3PM Props Engine."""
+"""FastAPI application for ValueHunter."""
 
 from __future__ import annotations
 
@@ -131,9 +131,9 @@ class BetsResponse(BaseModel):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup and shutdown logic."""
-    logger.info("NBA 3PM Props Engine starting up")
+    logger.info("ValueHunter starting up")
     yield
-    logger.info("NBA 3PM Props Engine shutting down")
+    logger.info("ValueHunter shutting down")
 
 
 def create_app() -> FastAPI:
@@ -141,8 +141,8 @@ def create_app() -> FastAPI:
     settings = get_settings()
 
     app = FastAPI(
-        title="NBA 3PM Props Engine",
-        description="Pregame NBA player 3-point props pricing and decision system",
+        title="ValueHunter",
+        description="NBA player props pricing engine — statistical modeling, Monte Carlo simulation, and edge detection",
         version="1.1.0",
         lifespan=lifespan,
     )
@@ -157,7 +157,6 @@ def create_app() -> FastAPI:
 
     @app.get("/v1/models", response_model=ModelsResponse)
     async def list_models():
-        # In production, query model_runs table
         return ModelsResponse(models=[
             ModelInfo(
                 model_name="minutes_model",
@@ -188,7 +187,6 @@ def create_app() -> FastAPI:
         5. Compares to market odds
         6. Returns bet/no-bet decisions
         """
-        # Placeholder: In production, this orchestrates the full pipeline
         return DecisionsResponse(
             date=date,
             decisions=[],

@@ -1,17 +1,19 @@
 from setuptools import setup, find_packages
 
 setup(
-    name="nba-props",
+    name="valuehunter",
     version="1.1.0",
-    author="Value Hunter",
-    description="NBA 3PM Props Engine - pregame player props pricing system",
+    author="ValueHunter",
+    description="NBA player props pricing engine — statistical modeling, Monte Carlo simulation, and edge detection",
+    long_description=open("README.md").read(),
+    long_description_content_type="text/markdown",
     url="https://github.com/zachringnight/ValueHunter",
     package_dir={"": "src"},
     packages=find_packages(where="src"),
     classifiers=[
-        "Development Status :: 3 - Alpha",
+        "Development Status :: 4 - Beta",
         "Intended Audience :: Developers",
-        "Topic :: Software Development :: Libraries",
+        "Topic :: Scientific/Engineering :: Information Analysis",
         "License :: OSI Approved :: MIT License",
         "Programming Language :: Python :: 3",
         "Programming Language :: Python :: 3.9",

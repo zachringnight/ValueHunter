@@ -1,3 +1,3 @@
-"""NBA 3PM Props Engine v1.1 - Pregame player 3-point props pricing system."""
+"""ValueHunter — NBA player props pricing engine."""
 
 __version__ = "1.1.0"

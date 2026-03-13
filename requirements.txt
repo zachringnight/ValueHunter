@@ -1,7 +1,13 @@
+# Core dependencies are listed in requirements-nba.txt
+# This file provides the minimal set for the library itself (no dev/test deps).
+#
+# For full development setup: pip install -r requirements-nba.txt
+
 pandas>=1.5.0
-pyyaml>=6.0
-requests>=2.28.0
 numpy>=1.24.0
 scipy>=1.10.0
-scikit-learn>=1.3.0
+scikit-learn>=1.2.0
+requests>=2.28.0
+pyyaml>=6.0
 fastapi>=0.100.0
+pydantic>=2.0.0

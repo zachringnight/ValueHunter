@@ -25,6 +25,7 @@ wheels/
 venv/
 ENV/
 env/
+.venv/
 
 # IDE
 .vscode/
@@ -37,19 +38,17 @@ env/
 .DS_Store
 Thumbs.db
 
-# Data files (keep structure but ignore large data)
-*.numbers
+# Environment variables (never commit secrets)
+.env
 
-# R and local environment
-.Rhistory
-.RData
-.Rproj.user/
-.Renviron
-
-# Output files
+# Data files
+data/cache/
 data/out/*
 !data/out/.gitkeep
 
-# Validation output
+# Generated output
 validation_output/
-data/cache/
+reports/*.md
+
+# Jupyter
+.ipynb_checkpoints/
