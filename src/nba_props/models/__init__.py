@@ -4,6 +4,7 @@ from .minutes_model import MinutesModel
 from .three_pa_model import ThreePAModel
 from .make_rate_model import MakeRateModel
 from .baseline import RollingAverageBaseline, DirectThreePMBaseline, BookmakerBaseline
+from .team_strength import BasketballValueModel
 
 __all__ = [
     "MinutesModel",
@@ -12,4 +13,5 @@ __all__ = [
     "RollingAverageBaseline",
     "DirectThreePMBaseline",
     "BookmakerBaseline",
+    "BasketballValueModel",
 ]
