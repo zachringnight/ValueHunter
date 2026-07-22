@@ -101,7 +101,7 @@ class BasketballValueModel:
         """
         if self.ridge_alpha < 0:
             raise ValueError("ridge_alpha must be non-negative")
-        if not features:
+        if len(features) == 0:
             raise ValueError("features cannot be empty")
 
         row_count = len(features)
@@ -241,7 +241,7 @@ class BasketballValueModel:
 
     def predict(self, features: Sequence[Sequence[float]]) -> List[float]:
         """Predict targets for a batch of feature rows."""
-        if not features:
+        if len(features) == 0:
             return []
         return [self.predict_one(row) for row in features]
 
@@ -259,7 +259,14 @@ class BasketballValueModel:
         y_mean = float(np.mean(y_true))
         ss_tot = float(np.sum((y_true - y_mean) ** 2))
         ss_res = float(np.sum((y_true - preds) ** 2))
-        return 1.0 if ss_tot <= _EPSILON else 1 - (ss_res / ss_tot)
+        if ss_tot <= _EPSILON:
+            # Target is constant across this fold/sample. Only report a
+            # perfect score if predictions are (numerically) exact too --
+            # otherwise a bad-but-nonzero-residual fold would silently be
+            # scored as a perfect fit and skew fold-averaged selection in
+            # tune_ridge_alpha.
+            return 1.0 if ss_res <= _EPSILON else 0.0
+        return 1 - (ss_res / ss_tot)
 
     def score_rmse(self, features: Sequence[Sequence[float]], targets: Sequence[float]) -> float:
         """Return the root-mean-squared error on *features*/*targets*."""
