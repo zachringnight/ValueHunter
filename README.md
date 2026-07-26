@@ -45,6 +45,10 @@ src/nba_props/
 └── config/          # Engine configuration
 ```
 
+`models/team_strength.py` (`BasketballValueModel`) originated as the standalone
+ValueSauce prototype and has been merged in here as a general-purpose
+ridge-regression team-strength estimator.
+
 ## License
 
 MIT License
